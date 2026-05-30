@@ -1,4 +1,4 @@
-"""Sensor platform for FUSE Energy."""
+"""Sensor platform for Fuse Energy+."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,70 +18,111 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import FuseEnergyCoordinator, FusePremisesData
+from .coordinator import FuseEnergyCoordinator, FuseEnergyData
 
 
 @dataclass(frozen=True, kw_only=True)
 class FuseSensorDescription(SensorEntityDescription):
-    value_fn: Callable[[FusePremisesData], float | str | None] = lambda _: None
+    value_fn: Callable[[FuseEnergyData], float | str | None] = lambda _: None
+    unit_fn: Callable[[FuseEnergyData], str | None] = lambda _: None
 
 
 _SENSORS: tuple[FuseSensorDescription, ...] = (
+    # Electricity — today
+    FuseSensorDescription(
+        key="electricity_kwh_today",
+        translation_key="electricity_kwh_today",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        value_fn=lambda d: d.electricity_kwh_today,
+        suggested_display_precision=2,
+    ),
+    FuseSensorDescription(
+        key="electricity_cost_today",
+        translation_key="electricity_cost_today",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.electricity_cost_today,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=2,
+    ),
+    # Gas — today
+    FuseSensorDescription(
+        key="gas_kwh_today",
+        translation_key="gas_kwh_today",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        value_fn=lambda d: d.gas_kwh_today,
+        suggested_display_precision=2,
+    ),
+    FuseSensorDescription(
+        key="gas_cost_today",
+        translation_key="gas_cost_today",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.gas_cost_today,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=2,
+    ),
+    # Account balance
     FuseSensorDescription(
         key="balance",
         translation_key="balance",
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.balance,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=2,
+    ),
+    # Electricity tariff
+    FuseSensorDescription(
+        key="electricity_tariff_title",
+        translation_key="electricity_tariff_title",
+        value_fn=lambda d: d.electricity_tariff_title,
     ),
     FuseSensorDescription(
-        key="energy_consumption",
-        translation_key="energy_consumption",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        value_fn=lambda d: d.energy_consumption_kwh,
-    ),
-    FuseSensorDescription(
-        key="gas_consumption",
-        translation_key="gas_consumption",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        value_fn=lambda d: d.gas_consumption_kwh,
-    ),
-    FuseSensorDescription(
-        key="current_tariff",
-        translation_key="current_tariff",
-        device_class=SensorDeviceClass.ENUM,
-        options=["unknown"],
-        value_fn=lambda d: d.tariff_name,
-    ),
-    FuseSensorDescription(
-        key="current_tariff_standing_charge",
-        translation_key="current_tariff_standing_charge",
+        key="electricity_unit_rate",
+        translation_key="electricity_unit_rate",
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.tariff_standing_charge,
+        value_fn=lambda d: d.electricity_unit_rate,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=4,
     ),
     FuseSensorDescription(
-        key="current_tariff_unit_rate",
-        translation_key="current_tariff_unit_rate",
+        key="electricity_standing_charge",
+        translation_key="electricity_standing_charge",
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: d.tariff_unit_rate,
+        value_fn=lambda d: d.electricity_standing_charge,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=4,
+    ),
+    # Gas tariff
+    FuseSensorDescription(
+        key="gas_tariff_title",
+        translation_key="gas_tariff_title",
+        value_fn=lambda d: d.gas_tariff_title,
     ),
     FuseSensorDescription(
-        key="direct_debit_status",
-        translation_key="direct_debit_status",
-        value_fn=lambda d: d.direct_debit_status,
-    ),
-    FuseSensorDescription(
-        key="bill_amount",
-        translation_key="bill_amount",
+        key="gas_unit_rate",
+        translation_key="gas_unit_rate",
         device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda d: d.bill_amount,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.gas_unit_rate,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=4,
+    ),
+    FuseSensorDescription(
+        key="gas_standing_charge",
+        translation_key="gas_standing_charge",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda d: d.gas_standing_charge,
+        unit_fn=lambda d: d.balance_currency or "GBP",
+        suggested_display_precision=4,
     ),
 )
 
@@ -94,6 +135,8 @@ async def async_setup_entry(
 
 
 class FuseEnergySensor(CoordinatorEntity[FuseEnergyCoordinator], SensorEntity):
+    """One Fuse Energy sensor."""
+
     _attr_has_entity_name = True
     entity_description: FuseSensorDescription
 
@@ -104,14 +147,15 @@ class FuseEnergySensor(CoordinatorEntity[FuseEnergyCoordinator], SensorEntity):
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id = f"fuse_energy_{description.key}"
+        self._attr_unique_id = f"{DOMAIN}_{coordinator.data.premises_fid}_{description.key}"
 
     @property
     def device_info(self) -> DeviceInfo:
+        d = self.coordinator.data
         return DeviceInfo(
-            identifiers={(DOMAIN, "fuse_energy")},
-            name=self.coordinator.data.premises_name or "FUSE Energy",
-            manufacturer="FUSE Energy",
+            identifiers={(DOMAIN, d.premises_fid or "fuse_energy")},
+            name=d.premises_name or "Fuse Energy",
+            manufacturer="Fuse Energy",
         )
 
     @property
@@ -120,10 +164,7 @@ class FuseEnergySensor(CoordinatorEntity[FuseEnergyCoordinator], SensorEntity):
 
     @property
     def native_unit_of_measurement(self) -> str | None:
-        if self.entity_description.device_class == SensorDeviceClass.MONETARY:
-            if self.entity_description.key == "balance":
-                return self.coordinator.data.balance_currency or "GBP"
-            if self.entity_description.key == "bill_amount":
-                return self.coordinator.data.bill_currency or "GBP"
-            return "GBP"
+        unit = self.entity_description.unit_fn(self.coordinator.data)
+        if unit:
+            return unit
         return self.entity_description.native_unit_of_measurement

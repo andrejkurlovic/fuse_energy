@@ -2,48 +2,48 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to FUSE Energy",
-        "description": "Enter your FUSE Energy account email address.",
+        "title": "Connect to Fuse Energy",
+        "description": "Enter your Fuse Energy account email address. A verification code will be sent to your phone.",
         "data": {
           "email": "Email address"
         }
       },
       "otp": {
         "title": "Enter verification code",
-        "description": "Enter the OTP code sent to your phone by FUSE Energy.",
+        "description": "Enter the code sent to your phone by Fuse Energy ({email}).",
         "data": {
           "code": "Verification code"
         }
       },
-      "magic_link": {
-        "title": "Magic Link Authentication",
-        "description": "Check your email for a magic link from FUSE Energy. Open the link, copy the token from the URL (the part after 'token='), and paste it below.",
-        "data": {
-          "magic_token": "Magic link token"
-        }
+      "reauth_confirm": {
+        "title": "Re-authenticate Fuse Energy",
+        "description": "Your Fuse Energy session has expired. Click Submit to send a new code to {email}."
       }
     },
     "error": {
       "invalid_auth": "Invalid email or verification code.",
-      "cannot_connect": "Unable to connect to FUSE Energy. Check your network.",
-      "unknown": "An unexpected error occurred. See the logs for details.",
-      "no_premises": "No premises found for this account.",
-      "magic_link_pending": "Magic link not verified. Copy the token from the link URL and try again."
+      "cannot_connect": "Unable to connect to Fuse Energy. Check your network.",
+      "unknown": "An unexpected error occurred. Check the HA logs for details.",
+      "no_premises": "No premises found for this account."
     },
     "abort": {
-      "already_configured": "This FUSE Energy account is already configured."
+      "already_configured": "This Fuse Energy account is already configured.",
+      "reauth_successful": "Re-authentication successful."
     }
   },
   "entity": {
     "sensor": {
-      "balance": { "name": "Balance" },
-      "energy_consumption": { "name": "Energy consumption" },
-      "gas_consumption": { "name": "Gas consumption" },
-      "current_tariff": { "name": "Current tariff" },
-      "current_tariff_standing_charge": { "name": "Standing charge" },
-      "current_tariff_unit_rate": { "name": "Unit rate" },
-      "direct_debit_status": { "name": "Direct debit status" },
-      "bill_amount": { "name": "Bill amount" }
+      "electricity_kwh_today": { "name": "Electricity today" },
+      "electricity_cost_today": { "name": "Electricity cost today" },
+      "gas_kwh_today": { "name": "Gas today" },
+      "gas_cost_today": { "name": "Gas cost today" },
+      "balance": { "name": "Account balance" },
+      "electricity_tariff_title": { "name": "Electricity tariff" },
+      "electricity_unit_rate": { "name": "Electricity unit rate" },
+      "electricity_standing_charge": { "name": "Electricity standing charge" },
+      "gas_tariff_title": { "name": "Gas tariff" },
+      "gas_unit_rate": { "name": "Gas unit rate" },
+      "gas_standing_charge": { "name": "Gas standing charge" }
     }
   }
 }

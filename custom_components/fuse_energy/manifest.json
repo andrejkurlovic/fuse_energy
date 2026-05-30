@@ -1,6 +1,6 @@
 {
   "domain": "fuse_energy",
-  "name": "FUSE Energy",
+  "name": "Fuse Energy+",
   "codeowners": ["@andrejkurlovic"],
   "config_flow": true,
   "dependencies": [],
@@ -9,5 +9,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/andrejkurlovic/fuse_energy/issues",
   "requirements": [],
-  "version": "2025.6.0"
+  "version": "2026.6.0"
 }
