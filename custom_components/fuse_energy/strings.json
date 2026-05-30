@@ -10,14 +10,17 @@
       },
       "otp": {
         "title": "Enter verification code",
-        "description": "Enter the OTP code sent to your email by FUSE Energy.",
+        "description": "Enter the OTP code sent to your phone by FUSE Energy.",
         "data": {
-          "otp": "Verification code"
+          "code": "Verification code"
         }
       },
       "magic_link": {
         "title": "Magic Link Authentication",
-        "description": "Click the link sent to your email, then click Submit below to continue."
+        "description": "Check your email for a magic link from FUSE Energy. Open the link, copy the token from the URL (the part after 'token='), and paste it below.",
+        "data": {
+          "magic_token": "Magic link token"
+        }
       }
     },
     "error": {
@@ -25,7 +28,7 @@
       "cannot_connect": "Unable to connect to FUSE Energy. Check your network.",
       "unknown": "An unexpected error occurred. See the logs for details.",
       "no_premises": "No premises found for this account.",
-      "magic_link_pending": "Magic link not verified yet. Click the link in your email and try again."
+      "magic_link_pending": "Magic link not verified. Copy the token from the link URL and try again."
     },
     "abort": {
       "already_configured": "This FUSE Energy account is already configured."

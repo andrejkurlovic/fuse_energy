@@ -67,8 +67,11 @@ def _extract_tokens(data: Any) -> dict[str, str] | None:
 
 def _detect_challenge_type(data: Any) -> str:
     if isinstance(data, dict):
-        ct = data.get("challenge_type", "")
-        if isinstance(ct, str) and "magic" in ct.lower():
+        ct = str(data.get("challenge_type", ""))
+        if "MAGIC_LINK" in ct.upper():
+            return "magic_link"
+        ct2 = str(data.get("status_string", ""))
+        if "MAGIC" in ct2.upper():
             return "magic_link"
         for v in data.values():
             if isinstance(v, dict):
@@ -125,10 +128,8 @@ class FuseEnergyAPI:
                             if retry_resp.status >= 400:
                                 if not suppress_error_log:
                                     _log_failure(
-                                        operation,
-                                        url,
-                                        status=retry_resp.status,
-                                        body=body_text,
+                                        operation, url,
+                                        status=retry_resp.status, body=body_text,
                                     )
                                 raise FuseError(f"HTTP {retry_resp.status}")
                             return await retry_resp.json(content_type=None)
@@ -145,8 +146,13 @@ class FuseEnergyAPI:
 
     async def initial_challenge(self, email: str) -> dict[str, Any]:
         payload = {
-            "challenge_type": "InitialChallenge",
-            "email": email,
+            "challenge_type": "INITIAL",
+            "data": {
+                "method": "EMAIL",
+                "data": {
+                    "email_address": email,
+                },
+            },
         }
         data = await self._request(
             "POST", _AUTH_URL, json=payload, operation="initial_challenge"
@@ -166,10 +172,12 @@ class FuseEnergyAPI:
             "challenge_type": challenge_type,
         }
 
-    async def otp_challenge(self, otp: str, auth_flow_token: str) -> dict[str, str]:
+    async def otp_challenge(self, code: str, auth_flow_token: str) -> dict[str, str]:
         payload = {
-            "challenge_type": "OtpChallenge",
-            "otp": otp,
+            "challenge_type": "PHONE_OTP",
+            "data": {
+                "code": code,
+            },
             "auth_flow_token": auth_flow_token,
         }
         data = await self._request(
@@ -185,18 +193,20 @@ class FuseEnergyAPI:
         self._refresh_token = tokens["refresh_token"]
         return tokens
 
-    async def magic_link_check(self, auth_flow_token: str) -> dict[str, str] | None:
+    async def magic_link_check(
+        self, magic_token: str, auth_flow_token: str
+    ) -> dict[str, str] | None:
         payload = {
-            "challenge_type": "MagicLinkCheckChallenge",
+            "challenge_type": "MAGIC_LINK_CHECK",
+            "data": {
+                "token": magic_token,
+            },
             "auth_flow_token": auth_flow_token,
         }
         try:
             data = await self._request(
-                "POST",
-                _AUTH_URL,
-                json=payload,
-                operation="magic_link_check",
-                suppress_error_log=True,
+                "POST", _AUTH_URL, json=payload,
+                operation="magic_link_check", suppress_error_log=True,
             )
         except FuseError:
             return None

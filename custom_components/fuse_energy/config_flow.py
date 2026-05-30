@@ -10,8 +10,8 @@ from .api import FuseAuthError, FuseEnergyAPI, FuseError
 from .const import CONF_ACCESS_TOKEN, CONF_REFRESH_TOKEN, DOMAIN
 
 _EMAIL_SCHEMA = vol.Schema({vol.Required(CONF_EMAIL): str})
-_OTP_SCHEMA = vol.Schema({"otp": str})
-_MAGIC_LINK_SCHEMA = vol.Schema({})
+_OTP_SCHEMA = vol.Schema({"code": str})
+_MAGIC_LINK_SCHEMA = vol.Schema({"magic_token": str})
 
 
 class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -58,7 +58,7 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
             assert self._api is not None
             try:
                 tokens = await self._api.otp_challenge(
-                    user_input["otp"], self._auth_flow_token
+                    user_input["code"], self._auth_flow_token
                 )
             except FuseAuthError:
                 errors["base"] = "invalid_auth"
@@ -88,26 +88,32 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             assert self._api is not None
-            try:
-                tokens = await self._api.magic_link_check(self._auth_flow_token)
-                if tokens:
-                    await self.async_set_unique_id(self._email.lower())
-                    self._abort_if_unique_id_configured()
-                    return self.async_create_entry(
-                        title=self._email,
-                        data={
-                            CONF_EMAIL: self._email,
-                            CONF_ACCESS_TOKEN: tokens["access_token"],
-                            CONF_REFRESH_TOKEN: tokens["refresh_token"],
-                        },
+            magic_token = user_input.get("magic_token", "").strip()
+            if magic_token:
+                try:
+                    tokens = await self._api.magic_link_check(
+                        magic_token, self._auth_flow_token
                     )
+                    if tokens:
+                        await self.async_set_unique_id(self._email.lower())
+                        self._abort_if_unique_id_configured()
+                        return self.async_create_entry(
+                            title=self._email,
+                            data={
+                                CONF_EMAIL: self._email,
+                                CONF_ACCESS_TOKEN: tokens["access_token"],
+                                CONF_REFRESH_TOKEN: tokens["refresh_token"],
+                            },
+                        )
+                    errors["base"] = "magic_link_pending"
+                except FuseAuthError:
+                    errors["base"] = "invalid_auth"
+                except FuseError:
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    errors["base"] = "unknown"
+            else:
                 errors["base"] = "magic_link_pending"
-            except FuseAuthError:
-                errors["base"] = "invalid_auth"
-            except FuseError:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="magic_link",
