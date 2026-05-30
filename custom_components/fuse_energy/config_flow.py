@@ -170,8 +170,8 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
                     or prem_obj.get("id")
                     or ""
                 )
-        except FuseError:
-            pass
+        except (FuseError, FuseAuthError):
+            pass  # premises_fid optional — coordinator will fetch on first refresh
 
         await self.async_set_unique_id(self._email)
         self._abort_if_unique_id_configured()

@@ -199,6 +199,7 @@ class FuseEnergyAPI:
             payload["auth_flow_token"] = auth_flow_token
 
         data = await self._post(_AUTH_URL, payload, operation="magic_link_challenge")
+        _LOGGER.warning("FuseEnergy magic_link response keys: %s", list(data.keys()))
 
         inner: dict[str, Any] = {}
         raw_data = data.get("data")
