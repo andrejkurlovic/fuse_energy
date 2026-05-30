@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to Fuse Energy",
-        "description": "Enter your Fuse Energy account email address. A verification code will be sent to your phone.",
+        "description": "Enter your Fuse Energy account email address.",
         "data": {
           "email": "Email address"
         }
@@ -15,14 +15,21 @@
           "code": "Verification code"
         }
       },
+      "magic_link": {
+        "title": "Magic link verification",
+        "description": "Fuse Energy sent a magic link to **{email}**.\n\n1. Open the email on a **desktop browser** (not your phone)\n2. **Right-click** the magic link → **Copy link address**\n3. Paste the full URL below\n\nThe URL will look like: `https://www.fuseenergy.com/...?token=...`",
+        "data": {
+          "magic_link_url": "Magic link URL (paste the full URL)"
+        }
+      },
       "reauth_confirm": {
         "title": "Re-authenticate Fuse Energy",
-        "description": "Your Fuse Energy session has expired. Click Submit to send a new code to {email}."
+        "description": "Your Fuse Energy session has expired. Click Submit to send a new link/code to {email}."
       }
     },
     "error": {
-      "invalid_auth": "Invalid email or verification code.",
-      "cannot_connect": "Unable to connect to Fuse Energy. Check your network.",
+      "invalid_auth": "Invalid email or verification code / link token.",
+      "cannot_connect": "Unable to connect to Fuse Energy. Check your network and that api.fuseenergy.com is not blocked by DNS/Pi-hole.",
       "unknown": "An unexpected error occurred. Check the HA logs for details.",
       "no_premises": "No premises found for this account."
     },

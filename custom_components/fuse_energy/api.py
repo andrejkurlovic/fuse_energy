@@ -151,14 +151,13 @@ class FuseEnergyAPI:
     # ------------------------------------------------------------------
 
     async def initial_challenge(self, email: str) -> dict[str, Any]:
-        """POST api/v3/auth — step 1: send email, receive auth_flow_token.
+        """POST api/v3/auth — step 1: send email, get next challenge type.
 
-        Payload shape proven by:
-          ChallengeType.java: INITIAL (ordinal 0)
-          AuthClientData.InitialChallenge.Method: EMAIL (ordinal 0)
-          AuthClientData.InitialChallenge.Data.EmailData: @o(name="email_address")
-          AuthFlowType.java: LOGIN (ordinal 0)
-          AuthRequest.InitialChallenge: field name = "challenge_type" (ChallengeType.FIELD_NAME)
+        Payload proven by: ChallengeType.INITIAL, AuthClientData.InitialChallenge.Method.EMAIL,
+        AuthClientData.InitialChallenge.Data.EmailData @o(name="email_address"), AuthFlowType.LOGIN.
+
+        Returns dict with challenge_type and auth_flow_token (may be None for MAGIC_LINK_CHECK).
+        Raises FuseAuthError only on HTTP 401. Other non-200 raises FuseError (cannot_connect).
         """
         payload: dict[str, Any] = {
             "challenge_type": "INITIAL",
@@ -169,13 +168,54 @@ class FuseEnergyAPI:
             },
         }
         data = await self._post(_AUTH_URL, payload, operation="initial_challenge")
-        token = data.get("auth_flow_token")
-        if not token:
-            _log_failure("initial_challenge", _AUTH_URL, body=str(data)[:500])
-            raise FuseAuthError("No auth_flow_token in initial challenge response")
+        challenge_type = data.get("challenge_type", "PHONE_OTP")
+        auth_flow_token = data.get("auth_flow_token")  # may be None for MAGIC_LINK_CHECK
+
+        if challenge_type not in ("PHONE_OTP", "MAGIC_LINK_CHECK", "AUTHORIZED"):
+            _LOGGER.warning(
+                "FuseEnergy: unexpected challenge_type=%s after INITIAL", challenge_type
+            )
+
         return {
-            "auth_flow_token": token,
-            "challenge_type": data.get("challenge_type", "PHONE_OTP"),
+            "auth_flow_token": auth_flow_token,
+            "challenge_type": challenge_type,
+        }
+
+    async def magic_link_challenge(
+        self, token: str, auth_flow_token: str | None
+    ) -> dict[str, str]:
+        """POST api/v3/auth — magic link step: submit token from email link.
+
+        Payload proven by:
+          ChallengeType.MAGIC_LINK_CHECK (ordinal 3)
+          AuthClientData.MagicLinkCheckChallenge: @o(name="token") String token
+        auth_flow_token is null for this flow (server returns null in INITIAL response).
+        """
+        payload: dict[str, Any] = {
+            "challenge_type": "MAGIC_LINK_CHECK",
+            "data": {"token": token},
+        }
+        if auth_flow_token:
+            payload["auth_flow_token"] = auth_flow_token
+
+        data = await self._post(_AUTH_URL, payload, operation="magic_link_challenge")
+
+        inner: dict[str, Any] = {}
+        raw_data = data.get("data")
+        if isinstance(raw_data, dict):
+            inner = raw_data
+        access_token = inner.get("access_token") or data.get("access_token")
+        refresh_token = inner.get("refresh_token") or data.get("refresh_token")
+
+        if not access_token:
+            _log_failure("magic_link_challenge", _AUTH_URL, body=str(data)[:500])
+            raise FuseAuthError("No access_token in magic link challenge response")
+
+        self._access_token = access_token
+        self._refresh_token = refresh_token
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token or "",
         }
 
     async def otp_challenge(self, code: str, auth_flow_token: str) -> dict[str, str]:
