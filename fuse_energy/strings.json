@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to FUSE Energy",
+        "description": "Enter your FUSE Energy account email address. You will receive a verification code.",
+        "data": {
+          "email": "Email address"
+        }
+      },
+      "otp": {
+        "title": "Enter verification code",
+        "description": "Enter the OTP code sent to your phone/email by FUSE Energy.",
+        "data": {
+          "otp": "Verification code"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or verification code.",
+      "cannot_connect": "Unable to connect to FUSE Energy. Check your network.",
+      "unknown": "An unexpected error occurred. See the logs for details.",
+      "no_premises": "No premises found for this account."
+    },
+    "abort": {
+      "already_configured": "This FUSE Energy account is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": { "name": "Balance" },
+      "energy_consumption": { "name": "Energy consumption" },
+      "gas_consumption": { "name": "Gas consumption" },
+      "current_tariff": { "name": "Current tariff" },
+      "current_tariff_standing_charge": { "name": "Standing charge" },
+      "current_tariff_unit_rate": { "name": "Unit rate" },
+      "direct_debit_status": { "name": "Direct debit status" },
+      "bill_amount": { "name": "Bill amount" }
+    }
+  }
+}
