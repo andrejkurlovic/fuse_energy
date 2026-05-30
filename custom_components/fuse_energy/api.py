@@ -1,12 +1,14 @@
-"""Async API client for Fuse Energy — rebuilt from APK evidence.
+"""Async API client for Fuse Energy — proven from live API testing.
 
-Auth flow proven by decompilation of Android app v2.0.65:
-  Step 1: POST api/v3/auth  challenge_type=INITIAL  data.method=EMAIL  data.data.email_address=...
-  Step 2: POST api/v3/auth  challenge_type=PHONE_OTP  auth_flow_token=...  data.code=...
-  Refresh: POST api/v1/auth/refresh  refresh_token=...
+Auth flow (APK + live verified):
+  Step 1: POST api/v3/auth  challenge_type=INITIAL  data={method:EMAIL, data:{email_address:...}, auth_flow_type:LOGIN}
+  Step 2: POST api/v3/auth  challenge_type=MAGIC_LINK_CHECK  data={token:<jwt_from_email_url>}
+  Refresh: POST api/v1/auth/refresh  body={refresh_token:...}  + Authorization: Bearer <old_access_token>
 
-Required headers proven by xk/h.java network interceptor (lines 142-186):
-  User-Agent, Accept-Language:en-GB, Session-Id, X-Request-Id, Device-Model, Device-Id
+Required headers (proven by live testing — Time-Zone is REQUIRED; without it server
+returns an invalid UUID token instead of a JWT):
+  User-Agent, Accept-Language:en-GB, Session-Id, X-Request-Id,
+  Device-Model, Device-Id, Time-Zone
 """
 from __future__ import annotations
 
@@ -55,12 +57,7 @@ class FuseError(Exception):
 
 
 class FuseEnergyAPI:
-    """Async wrapper around the Fuse Energy private API.
-
-    session_id and device_id are persistent UUIDs generated once per integration
-    setup and stored in the config entry. They are sent as Session-Id and Device-Id
-    headers on every request (xk/h.java interceptor, lines 142-186).
-    """
+    """Async wrapper around the Fuse Energy private API."""
 
     def __init__(
         self,
@@ -79,6 +76,8 @@ class FuseEnergyAPI:
         self._refresh_token = refresh_token
 
     def _base_headers(self) -> dict[str, str]:
+        """Build required headers. Time-Zone is REQUIRED — without it the server
+        returns an invalid UUID token instead of a valid JWT access_token."""
         return {
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
@@ -87,6 +86,7 @@ class FuseEnergyAPI:
             "X-Request-Id": str(uuid.uuid4()),
             "Device-Model": "Home Assistant",
             "Device-Id": self._device_id,
+            "Time-Zone": "Europe/London",
         }
 
     def _auth_headers(self) -> dict[str, str]:
@@ -95,21 +95,19 @@ class FuseEnergyAPI:
             h["Authorization"] = f"Bearer {self._access_token}"
         return h
 
-    # ------------------------------------------------------------------
-    # Low-level HTTP helpers
-    # ------------------------------------------------------------------
-
     async def _post(
         self,
         url: str,
         payload: dict[str, Any],
         *,
         operation: str,
-        authenticated: bool = False,
+        token: str | None = None,
     ) -> dict[str, Any]:
-        headers = self._auth_headers() if authenticated else self._base_headers()
+        h = self._base_headers()
+        if token:
+            h["Authorization"] = f"Bearer {token}"
         try:
-            async with self._session.post(url, headers=headers, json=payload) as resp:
+            async with self._session.post(url, headers=h, json=payload) as resp:
                 body = await resp.text()
                 if resp.status >= 400:
                     _log_failure(operation, url, status=resp.status, body=body)
@@ -151,13 +149,9 @@ class FuseEnergyAPI:
     # ------------------------------------------------------------------
 
     async def initial_challenge(self, email: str) -> dict[str, Any]:
-        """POST api/v3/auth — step 1: send email, get next challenge type.
+        """POST api/v3/auth — step 1: send email, get challenge type back.
 
-        Payload proven by: ChallengeType.INITIAL, AuthClientData.InitialChallenge.Method.EMAIL,
-        AuthClientData.InitialChallenge.Data.EmailData @o(name="email_address"), AuthFlowType.LOGIN.
-
-        Returns dict with challenge_type and auth_flow_token (may be None for MAGIC_LINK_CHECK).
-        Raises FuseAuthError only on HTTP 401. Other non-200 raises FuseError (cannot_connect).
+        Returns dict with challenge_type and auth_flow_token (None for MAGIC_LINK_CHECK).
         """
         payload: dict[str, Any] = {
             "challenge_type": "INITIAL",
@@ -169,27 +163,21 @@ class FuseEnergyAPI:
         }
         data = await self._post(_AUTH_URL, payload, operation="initial_challenge")
         challenge_type = data.get("challenge_type", "PHONE_OTP")
-        auth_flow_token = data.get("auth_flow_token")  # may be None for MAGIC_LINK_CHECK
-
-        if challenge_type not in ("PHONE_OTP", "MAGIC_LINK_CHECK", "AUTHORIZED"):
-            _LOGGER.warning(
-                "FuseEnergy: unexpected challenge_type=%s after INITIAL", challenge_type
-            )
-
         return {
-            "auth_flow_token": auth_flow_token,
+            "auth_flow_token": data.get("auth_flow_token"),
             "challenge_type": challenge_type,
         }
 
     async def magic_link_challenge(
         self, token: str, auth_flow_token: str | None
     ) -> dict[str, str]:
-        """POST api/v3/auth — magic link step: submit token from email link.
+        """POST api/v3/auth — magic link step.
 
-        Payload proven by:
-          ChallengeType.MAGIC_LINK_CHECK (ordinal 3)
-          AuthClientData.MagicLinkCheckChallenge: @o(name="token") String token
-        auth_flow_token is null for this flow (server returns null in INITIAL response).
+        token: full JWT from the magic link URL ?token= parameter.
+        auth_flow_token: null for MAGIC_LINK_CHECK (server sends null in INITIAL response).
+        Returns {access_token, refresh_token}.
+
+        IMPORTANT: Time-Zone header must be present or server returns invalid UUID token.
         """
         payload: dict[str, Any] = {
             "challenge_type": "MAGIC_LINK_CHECK",
@@ -199,101 +187,79 @@ class FuseEnergyAPI:
             payload["auth_flow_token"] = auth_flow_token
 
         data = await self._post(_AUTH_URL, payload, operation="magic_link_challenge")
-        _LOGGER.warning("FuseEnergy magic_link response keys: %s", list(data.keys()))
-
-        inner: dict[str, Any] = {}
-        raw_data = data.get("data")
-        if isinstance(raw_data, dict):
-            inner = raw_data
-        access_token = inner.get("access_token") or data.get("access_token")
-        refresh_token = inner.get("refresh_token") or data.get("refresh_token")
+        inner = data.get("data") or {}
+        access_token = inner.get("access_token") if isinstance(inner, dict) else None
+        refresh_token = inner.get("refresh_token") if isinstance(inner, dict) else None
 
         if not access_token:
             _log_failure("magic_link_challenge", _AUTH_URL, body=str(data)[:500])
-            raise FuseAuthError("No access_token in magic link challenge response")
+            raise FuseAuthError("No access_token in magic link response — link may be expired or already used")
 
         self._access_token = access_token
         self._refresh_token = refresh_token
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token or "",
-        }
+        return {"access_token": access_token, "refresh_token": refresh_token or ""}
 
     async def otp_challenge(self, code: str, auth_flow_token: str) -> dict[str, str]:
-        """POST api/v3/auth — step 2: submit OTP, receive access+refresh tokens.
-
-        Payload shape proven by:
-          ChallengeType.java: PHONE_OTP (ordinal 2)
-          AuthClientData.OtpChallenge: field "code" = @o(name="code")
-          AuthResponseTokenPair: @o(name="access_token"), @o(name="refresh_token")
-        """
+        """POST api/v3/auth — OTP step (for accounts that use phone OTP)."""
         payload: dict[str, Any] = {
             "challenge_type": "PHONE_OTP",
             "auth_flow_token": auth_flow_token,
             "data": {"code": code},
         }
         data = await self._post(_AUTH_URL, payload, operation="otp_challenge")
-
-        # Successful response: challenge_type=AUTHORIZED, tokens inside data.data
-        inner: dict[str, Any] = {}
-        raw_data = data.get("data")
-        if isinstance(raw_data, dict):
-            inner = raw_data
-        # Some responses embed tokens at top level
-        access_token = inner.get("access_token") or data.get("access_token")
-        refresh_token = inner.get("refresh_token") or data.get("refresh_token")
+        inner = data.get("data") or {}
+        access_token = (inner.get("access_token") if isinstance(inner, dict) else None) or data.get("access_token")
+        refresh_token = (inner.get("refresh_token") if isinstance(inner, dict) else None) or data.get("refresh_token")
 
         if not access_token:
             _log_failure("otp_challenge", _AUTH_URL, body=str(data)[:500])
-            raise FuseAuthError("No access_token in OTP challenge response")
+            raise FuseAuthError("No access_token in OTP response")
 
         self._access_token = access_token
         self._refresh_token = refresh_token
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token or "",
-        }
+        return {"access_token": access_token, "refresh_token": refresh_token or ""}
 
     async def _refresh(self) -> bool:
-        """POST api/v1/auth/refresh — renew access token using refresh token.
+        """POST api/v1/auth/refresh — renew access token.
 
-        Proven by RefreshTokenRequest: @o(name="refresh_token"), @o(name="original_request_path")
-        Response: AuthResponseTokenPair: @o(name="access_token"), @o(name="refresh_token")
+        IMPORTANT (proven by live testing): must send the OLD access_token as
+        Authorization: Bearer while posting refresh_token in the body.
+        Calling without the Bearer header returns 401 'missing access token'.
         """
-        if not self._refresh_token:
+        if not self._refresh_token or not self._access_token:
             return False
         payload = {"refresh_token": self._refresh_token}
         try:
-            headers = self._base_headers()
-            async with self._session.post(
-                _REFRESH_URL, headers=headers, json=payload
-            ) as resp:
-                if resp.status >= 400:
-                    return False
-                data = await resp.json(content_type=None)
-            access_token = data.get("access_token")
-            if not access_token:
+            data = await self._post(
+                _REFRESH_URL, payload,
+                operation="token_refresh",
+                token=self._access_token,  # old token required in Bearer header
+            )
+            new_at = data.get("access_token") or (data.get("data") or {}).get("access_token")
+            if not new_at:
                 return False
-            self._access_token = access_token
-            new_refresh = data.get("refresh_token")
-            if new_refresh:
-                self._refresh_token = new_refresh
+            self._access_token = new_at
+            new_rt = data.get("refresh_token") or (data.get("data") or {}).get("refresh_token")
+            if new_rt:
+                self._refresh_token = new_rt
             return True
         except Exception:
             return False
 
     # ------------------------------------------------------------------
-    # Data endpoints
+    # Data endpoints (all confirmed from live API testing)
     # ------------------------------------------------------------------
 
     async def get_premises(self) -> list[dict[str, Any]]:
-        """GET api/v2/customer/premises — premises with supplies.
+        """GET api/v2/customer/premises.
 
-        Source: FuseApiService.java:195, PremisesWithSuppliesNetwork.java
-        Returns list of {premises: {fid/premises_fid, address}, supplies: [...],
-                         default_date_uk: "YYYY-MM-DD"}
-        Supply fields: supply_fid, supply_type (ELECTRICITY_IMPORT/GAS),
-                       identifier (MPAN or MPRN), serial_number, meter_type
+        Response structure (live verified):
+          [{premises: {id, address: {street_line_1, city, postcode}, premises_name},
+            supplies: [{supply_fid, supply_definition: {supply_type, identifier, names},
+                        meter_type_and_status: {type, status, serial_number}, ...}],
+            default_date_uk}]
+
+        supply_type values: "ELEC_IMPORT", "GAS"  (NOT "ELECTRICITY_IMPORT")
         """
         url = f"{API_BASE_URL}/api/v2/customer/premises"
         result = await self._get(url, operation="get_premises")
@@ -310,15 +276,17 @@ class FuseEnergyAPI:
         month: int | None = None,
         day: int | None = None,
     ) -> dict[str, Any]:
-        """GET api/v1/premises/{fid}/chart — consumption chart.
+        """GET api/v1/premises/{fid}/chart.
 
-        Source: FuseApiService.java:162
-        Granularity: year+month = daily bars (primary poll mode).
-        Response (ChartResponse.java):
-          total_bars: [{index: {year,month,day}, kWh: {decimal_value},
-                        money: {amount,currency}, type: ACTUAL|ESTIMATED|FORECAST}]
-          supplies: [per-supply breakdown with supply_type]
-          total_realised_money, total_money: {amount, currency}
+        Response structure (live verified):
+          {current_index, supplies, total_bars, total_lines, total_realised_money, total_money}
+
+          total_bars[]: {index:{year,month,day}, money:{amount:"5.73",currency:"GBP"},
+                         kWh:"25.470" (string!), type:"REALISED"}
+
+          supplies[]: {supply_fid, supply_type:"ELEC_IMPORT",
+                       bars:[{bar:{index,money,kWh,type}, breakdown:[...]}]}
+          Note: bars are nested under "bar" key inside each element.
         """
         params: list[str] = [f"year={year}"]
         if month is not None:
@@ -332,10 +300,10 @@ class FuseEnergyAPI:
     async def get_current_contracts(
         self, premises_fid: str, supply_fid: str
     ) -> dict[str, Any]:
-        """GET api/v5/contracts-current — current tariff for a supply.
+        """GET api/v5/contracts-current.
 
-        Source: FuseApiService.java:192, CurrentContracts.java
-        Response: {current: {tariff: {tariff_id, supply_type, title}, from_date_uk, to_date_uk}}
+        Response structure (live verified):
+          {supply_fid_to_contracts: {<supply_fid>: {current: {tariff:{tariff_id,title,...}}}}}
         """
         url = (
             f"{API_BASE_URL}/api/v5/contracts-current"
@@ -347,11 +315,7 @@ class FuseEnergyAPI:
     async def get_tariff_details(
         self, supply_fid: str, tariff_id: str
     ) -> dict[str, Any]:
-        """GET api/v1/tariff/details — unit rates and standing charges.
-
-        Source: FuseApiService.java:228, TariffDetailsResponse.java
-        Response includes UnitChargesNetwork (rate_name, price_per_kWh) and ApiStandingCharge.
-        """
+        """GET api/v1/tariff/details — unit rates and standing charges."""
         url = (
             f"{API_BASE_URL}/api/v1/tariff/details"
             f"?supply_fid={supply_fid}&tariff_ids={tariff_id}"
@@ -360,20 +324,16 @@ class FuseEnergyAPI:
         return result if isinstance(result, dict) else {}
 
     async def get_balance(self) -> dict[str, Any]:
-        """GET api/v1/balance — account balance.
+        """GET api/v1/balance.
 
-        Source: FuseApiService.java:240
-        Response: Money = {amount: BigDecimal, currency: "GBP"}
+        Response (live verified): {amount: "0" (string), currency: "GBP"}
         """
         url = f"{API_BASE_URL}/api/v1/balance"
         result = await self._get(url, operation="get_balance")
         return result if isinstance(result, dict) else {}
 
     async def get_individual(self) -> dict[str, Any]:
-        """GET api/v1/individual — account/customer info.
-
-        Source: FuseApiService.java:204, IndividualNetwork.java
-        """
+        """GET api/v1/individual — name, email, phone."""
         url = f"{API_BASE_URL}/api/v1/individual"
         result = await self._get(url, operation="get_individual")
         return result if isinstance(result, dict) else {}
