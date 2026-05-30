@@ -1,6 +1,4 @@
 {
   "name": "FUSE Energy",
-  "content_in_root": false,
-  "zip_release": true,
-  "filename": "fuse_energy.zip"
+  "content_in_root": false
 }
