@@ -3,24 +3,29 @@
     "step": {
       "user": {
         "title": "Connect to FUSE Energy",
-        "description": "Enter your FUSE Energy account email address. You will receive a verification code.",
+        "description": "Enter your FUSE Energy account email address.",
         "data": {
           "email": "Email address"
         }
       },
       "otp": {
         "title": "Enter verification code",
-        "description": "Enter the OTP code sent to your phone/email by FUSE Energy.",
+        "description": "Enter the OTP code sent to your email by FUSE Energy.",
         "data": {
           "otp": "Verification code"
         }
+      },
+      "magic_link": {
+        "title": "Magic Link Authentication",
+        "description": "Click the link sent to your email, then click Submit below to continue."
       }
     },
     "error": {
       "invalid_auth": "Invalid email or verification code.",
       "cannot_connect": "Unable to connect to FUSE Energy. Check your network.",
       "unknown": "An unexpected error occurred. See the logs for details.",
-      "no_premises": "No premises found for this account."
+      "no_premises": "No premises found for this account.",
+      "magic_link_pending": "Magic link not verified yet. Click the link in your email and try again."
     },
     "abort": {
       "already_configured": "This FUSE Energy account is already configured."

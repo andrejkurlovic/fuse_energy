@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -108,7 +108,7 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FusePremisesData]):
 
         if first_fid:
             try:
-                chart = await self.api.get_chart(first_fid, year=0)
+                chart = await self.api.get_chart(first_fid, year=datetime.now().year)
                 if isinstance(chart, dict):
                     total_kwh = chart.get("total_kwh") or chart.get("totalKwh")
                     if total_kwh is not None:

@@ -40,6 +40,43 @@ def _log_failure(
     _LOGGER.error(" | ".join(parts))
 
 
+def _extract_auth_flow_token(data: Any) -> str | None:
+    if isinstance(data, dict):
+        token = data.get("auth_flow_token") or data.get("authFlowToken")
+        if token:
+            return token
+        for v in data.values():
+            result = _extract_auth_flow_token(v)
+            if result:
+                return result
+    return None
+
+
+def _extract_tokens(data: Any) -> dict[str, str] | None:
+    if isinstance(data, dict):
+        at = data.get("access_token")
+        rt = data.get("refresh_token")
+        if at and rt:
+            return {"access_token": at, "refresh_token": rt}
+        for v in data.values():
+            result = _extract_tokens(v)
+            if result:
+                return result
+    return None
+
+
+def _detect_challenge_type(data: Any) -> str:
+    if isinstance(data, dict):
+        ct = data.get("challenge_type", "")
+        if isinstance(ct, str) and "magic" in ct.lower():
+            return "magic_link"
+        for v in data.values():
+            if isinstance(v, dict):
+                if _detect_challenge_type(v) == "magic_link":
+                    return "magic_link"
+    return "otp"
+
+
 class FuseEnergyAPI:
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
@@ -62,6 +99,7 @@ class FuseEnergyAPI:
         json: dict[str, Any] | None = None,
         authenticated: bool = False,
         operation: str = "",
+        suppress_error_log: bool = False,
     ) -> dict[str, Any] | list[Any]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if authenticated and self._access_token:
@@ -72,6 +110,10 @@ class FuseEnergyAPI:
                 method, url, headers=headers, json=json
             ) as resp:
                 body_text = await resp.text()
+                _LOGGER.debug(
+                    "%s response [%d]: %s", operation, resp.status, body_text[:500]
+                )
+
                 if resp.status == 401 and authenticated and self._refresh_token:
                     refreshed = await self._refresh()
                     if refreshed:
@@ -81,50 +123,90 @@ class FuseEnergyAPI:
                         ) as retry_resp:
                             body_text = await retry_resp.text()
                             if retry_resp.status >= 400:
-                                _log_failure(operation, url, status=retry_resp.status, body=body_text)
+                                if not suppress_error_log:
+                                    _log_failure(
+                                        operation,
+                                        url,
+                                        status=retry_resp.status,
+                                        body=body_text,
+                                    )
                                 raise FuseError(f"HTTP {retry_resp.status}")
                             return await retry_resp.json(content_type=None)
 
                 if resp.status >= 400:
-                    _log_failure(operation, url, status=resp.status, body=body_text)
+                    if not suppress_error_log:
+                        _log_failure(operation, url, status=resp.status, body=body_text)
                     raise FuseError(f"HTTP {resp.status}")
                 return await resp.json(content_type=None)
         except aiohttp.ClientError as exc:
-            _log_failure(operation, url, exc=exc)
+            if not suppress_error_log:
+                _log_failure(operation, url, exc=exc)
             raise FuseError(str(exc)) from exc
 
-    async def initial_challenge(self, email: str) -> str:
+    async def initial_challenge(self, email: str) -> dict[str, Any]:
         payload = {
             "challenge_type": "InitialChallenge",
-            "data": {"email": email},
+            "email": email,
         }
         data = await self._request(
             "POST", _AUTH_URL, json=payload, operation="initial_challenge"
         )
-        auth_flow_token = data.get("auth_flow_token") or data.get("authFlowToken")
-        if not auth_flow_token:
+
+        token = _extract_auth_flow_token(data)
+        if not token:
             _log_failure("initial_challenge", _AUTH_URL, body=str(data)[:500])
             raise FuseAuthError("No auth_flow_token in response")
-        return auth_flow_token
+
+        challenge_type = _detect_challenge_type(data)
+        _LOGGER.info(
+            "Initial challenge succeeded, flow type: %s", challenge_type
+        )
+        return {
+            "auth_flow_token": token,
+            "challenge_type": challenge_type,
+        }
 
     async def otp_challenge(self, otp: str, auth_flow_token: str) -> dict[str, str]:
         payload = {
             "challenge_type": "OtpChallenge",
-            "data": {"otp": otp},
+            "otp": otp,
             "auth_flow_token": auth_flow_token,
         }
         data = await self._request(
             "POST", _AUTH_URL, json=payload, operation="otp_challenge"
         )
-        inner = data.get("data", data)
-        access_token = inner.get("access_token")
-        refresh_token = inner.get("refresh_token")
-        if not access_token:
+
+        tokens = _extract_tokens(data)
+        if not tokens:
             _log_failure("otp_challenge", _AUTH_URL, body=str(data)[:500])
-            raise FuseAuthError("Authentication failed — no access token returned")
-        self._access_token = access_token
-        self._refresh_token = refresh_token
-        return {"access_token": access_token, "refresh_token": refresh_token}
+            raise FuseAuthError("Authentication failed — no tokens in response")
+
+        self._access_token = tokens["access_token"]
+        self._refresh_token = tokens["refresh_token"]
+        return tokens
+
+    async def magic_link_check(self, auth_flow_token: str) -> dict[str, str] | None:
+        payload = {
+            "challenge_type": "MagicLinkCheckChallenge",
+            "auth_flow_token": auth_flow_token,
+        }
+        try:
+            data = await self._request(
+                "POST",
+                _AUTH_URL,
+                json=payload,
+                operation="magic_link_check",
+                suppress_error_log=True,
+            )
+        except FuseError:
+            return None
+
+        tokens = _extract_tokens(data)
+        if tokens:
+            self._access_token = tokens["access_token"]
+            self._refresh_token = tokens["refresh_token"]
+            return tokens
+        return None
 
     async def _refresh(self) -> bool:
         if not self._refresh_token:
@@ -134,13 +216,13 @@ class FuseEnergyAPI:
             data = await self._request(
                 "POST", _REFRESH_URL, json=payload, operation="refresh"
             )
-            access_token = data.get("access_token")
-            refresh_token = data.get("refresh_token")
-            if not access_token:
+            tokens = _extract_tokens(data)
+            if not tokens:
                 return False
-            self._access_token = access_token
-            if refresh_token:
-                self._refresh_token = refresh_token
+            self._access_token = tokens["access_token"]
+            refresh = tokens.get("refresh_token")
+            if refresh:
+                self._refresh_token = refresh
             return True
         except FuseError:
             return False
@@ -161,7 +243,13 @@ class FuseEnergyAPI:
             operation="get_balance",
         )
 
-    async def get_chart(self, premises_fid: str, year: int, month: int | None = None, day: int | None = None) -> dict[str, Any]:
+    async def get_chart(
+        self,
+        premises_fid: str,
+        year: int,
+        month: int | None = None,
+        day: int | None = None,
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {"year": year}
         if month is not None:
             params["month"] = month
