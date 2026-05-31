@@ -55,6 +55,7 @@ except (ImportError, AttributeError):
 from homeassistant.components.recorder import get_instance as _get_recorder
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
+    get_last_statistics,
     statistics_during_period,
 )
 
@@ -174,12 +175,33 @@ async def async_inject_today(
     ).astimezone(_UTC)
     window_start = today_midnight_utc - timedelta(hours=2)
 
+    today_midnight_ts = today_midnight_utc.timestamp()
+
     def _last_sum_before_today(stat_id: str) -> float:
+        """Return the cumulative sum at the end of yesterday.
+
+        Primary: statistics_during_period in a 2-hour window ending at midnight.
+        Fallback: get_last_statistics — most recent bar with start before midnight.
+        This covers monetary stats where statistics_during_period may return empty.
+        """
         rows = statistics_during_period(
             hass, window_start, today_midnight_utc, {stat_id}, "hour", None, {"sum"}
         )
         entries = rows.get(stat_id) or []
-        return float(entries[-1]["sum"]) if entries else 0.0
+        if entries:
+            return float(entries[-1]["sum"])
+
+        # Fallback: get_last_statistics fetches the N most-recent rows regardless
+        # of time. Filter to entries whose start is strictly before today's midnight.
+        last = get_last_statistics(hass, 5, stat_id, True, {"sum"})
+        for row in last.get(stat_id) or []:
+            start = row.get("start")
+            if start is None:
+                continue
+            start_ts = start.timestamp() if isinstance(start, datetime) else float(start)
+            if start_ts < today_midnight_ts:
+                return float(row.get("sum") or 0.0)
+        return 0.0
 
     recorder = _get_recorder(hass)
     baseline_kwh = await recorder.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_KWH)
