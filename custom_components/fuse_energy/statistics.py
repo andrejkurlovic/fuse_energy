@@ -52,6 +52,7 @@ except (ImportError, AttributeError):
     _MEAN_TYPE_NONE = None  # type: ignore[assignment]
     _USE_MEAN_TYPE = False
 
+from homeassistant.components.recorder import get_instance as _get_recorder
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     statistics_during_period,
@@ -180,7 +181,8 @@ async def async_inject_today(
         entries = rows.get(stat_id) or []
         return float(entries[-1]["sum"]) if entries else 0.0
 
-    baseline_kwh = await hass.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_KWH)
+    recorder = _get_recorder(hass)
+    baseline_kwh = await recorder.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_KWH)
 
     # Only inject if historical import has been run (baseline > 0).
     # Without a baseline, injecting with sum starting at 0 would break the
@@ -188,7 +190,7 @@ async def async_inject_today(
     if baseline_kwh == 0.0:
         return
 
-    baseline_cost = await hass.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_COST)
+    baseline_cost = await recorder.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_COST)
 
     def _build(pts: dict, baseline: float, unit: str, stat_id: str) -> None:
         cum = baseline
