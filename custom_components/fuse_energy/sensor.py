@@ -86,22 +86,21 @@ _SUPPLY_SENSORS: tuple[FuseSupplySensorDescription, ...] = (
         name="Tariff",
         value_fn=lambda d: d.tariff_title,
     ),
-    # Unit rate (£/kWh) — from tariff_details
+    # Unit rate (£/kWh) — from tariff_details.
+    # Unit GBP/kWh required; MONETARY device_class only accepts bare currency codes.
     FuseSupplySensorDescription(
         key="unit_rate",
         name="Unit rate",
-        device_class=SensorDeviceClass.MONETARY,
         value_fn=lambda d: d.unit_rate,
-        unit_fn=lambda _: "GBP",
+        unit_fn=lambda _: "GBP/kWh",
         suggested_display_precision=4,
     ),
-    # Standing charge (£/day) — from tariff_details
+    # Standing charge (£/day) — from tariff_details.
     FuseSupplySensorDescription(
         key="standing_charge",
         name="Standing charge",
-        device_class=SensorDeviceClass.MONETARY,
         value_fn=lambda d: d.standing_charge,
-        unit_fn=lambda _: "GBP",
+        unit_fn=lambda _: "GBP/day",
         suggested_display_precision=4,
     ),
 )
