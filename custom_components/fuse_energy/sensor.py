@@ -52,7 +52,8 @@ _SUPPLY_SENSORS: tuple[FuseSupplySensorDescription, ...] = (
         value_fn=lambda d: d.kwh_today,
         suggested_display_precision=2,
     ),
-    # Yesterday — useful when today gas=0 (smart meter lag)
+    # Yesterday kWh — enabled by default; mirrors the app's daily confirmed reading.
+    # Essential for gas (smart meter lag means today is always 0 until next day).
     FuseSupplySensorDescription(
         key="kwh_yesterday",
         name="Yesterday",
@@ -60,7 +61,6 @@ _SUPPLY_SENSORS: tuple[FuseSupplySensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         value_fn=lambda d: d.kwh_yesterday,
         suggested_display_precision=2,
-        entity_registry_enabled_default=False,
     ),
     # Today's cost
     FuseSupplySensorDescription(
@@ -68,6 +68,15 @@ _SUPPLY_SENSORS: tuple[FuseSupplySensorDescription, ...] = (
         name="Cost today",
         device_class=SensorDeviceClass.MONETARY,
         value_fn=lambda d: d.cost_today,
+        unit_fn=lambda _: "GBP",
+        suggested_display_precision=2,
+    ),
+    # Yesterday cost — mirrors the app's daily confirmed cost.
+    FuseSupplySensorDescription(
+        key="cost_yesterday",
+        name="Cost yesterday",
+        device_class=SensorDeviceClass.MONETARY,
+        value_fn=lambda d: d.cost_yesterday,
         unit_fn=lambda _: "GBP",
         suggested_display_precision=2,
     ),

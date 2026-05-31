@@ -37,6 +37,7 @@
       "kwh_today":         { "name": "Today" },
       "kwh_yesterday":     { "name": "Yesterday" },
       "cost_today":        { "name": "Cost today" },
+      "cost_yesterday":    { "name": "Cost yesterday" },
       "tariff":            { "name": "Tariff" },
       "unit_rate":         { "name": "Unit rate" },
       "standing_charge":   { "name": "Standing charge" },
