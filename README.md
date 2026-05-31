@@ -148,6 +148,11 @@ The import runs in the background (~1–2 minutes for hourly mode, ~5 seconds fo
 - **`auto` / `hourly`**: fetches the hourly chart endpoint (1 API call per day, ~270 calls for 9-month backfill). Electricity gets 24 hourly data points per day. Gas is always daily.
 - **`daily`**: fetches the monthly chart endpoint only (~9 calls for full backfill). Both electricity and gas get one data point per day.
 
+> ⚠️ **Important — do not mix granularities for electricity:**
+> Electricity history is stored as **hourly** statistics (24 bars/day, timestamped per hour).
+> Gas history is stored as **daily** statistics (1 bar/day).
+> If you have already imported electricity with `auto` or `hourly`, **do not re-import using `daily`** — the daily bars share the midnight (00:00) timestamp with the first hourly bar of each day, and will overwrite it with the full day's total. Always use `granularity: auto` (or `hourly`) for any subsequent electricity import.
+
 ---
 
 ## Energy Dashboard Setup
