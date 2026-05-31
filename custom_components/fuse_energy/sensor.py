@@ -22,6 +22,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -239,10 +240,25 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: FuseEnergyCoordinator = hass.data[DOMAIN][entry.entry_id]
+    d = coordinator.data
+
+    # Pre-register the account (premises) device so that meter devices' via_device
+    # reference resolves when async_add_entities processes them. Without this,
+    # HA logs a warning about a non-existing via_device at startup.
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, d.premises_fid or "fuse_energy_account")},
+        name=d.premises_name or "Fuse Energy",
+        manufacturer="Fuse Energy",
+        model="Energy Account",
+        suggested_area=d.premises_name or None,
+    )
+
     entities: list[SensorEntity] = []
 
     # One set of supply sensors per meter
-    for sd in coordinator.data.supplies:
+    for sd in d.supplies:
         for desc in _SUPPLY_SENSORS:
             entities.append(FuseSupplySensor(coordinator, desc, sd))
 

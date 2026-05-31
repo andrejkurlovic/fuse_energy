@@ -57,6 +57,8 @@ from homeassistant.components.recorder.statistics import async_add_external_stat
 
 def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
     name = _STAT_NAMES[statistic_id]
+    # unit_class required from HA 2026.11; "energy" for kWh, "monetary" for GBP
+    unit_class = "energy" if unit == "kWh" else "monetary"
     if _USE_MEAN_TYPE:
         return StatisticMetaData(
             source=DOMAIN,
@@ -65,6 +67,7 @@ def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
             unit_of_measurement=unit,
             has_sum=True,
             mean_type=_MEAN_TYPE_NONE,
+            unit_class=unit_class,
         )
     return StatisticMetaData(
         source=DOMAIN,
@@ -73,6 +76,7 @@ def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
         unit_of_measurement=unit,
         has_sum=True,
         has_mean=False,
+        unit_class=unit_class,
     )
 
 
