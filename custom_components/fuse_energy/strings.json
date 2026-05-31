@@ -4,33 +4,27 @@
       "user": {
         "title": "Connect to Fuse Energy",
         "description": "Enter your Fuse Energy account email address.",
-        "data": {
-          "email": "Email address"
-        }
+        "data": { "email": "Email address" }
       },
       "otp": {
         "title": "Enter verification code",
         "description": "Enter the code sent to your phone by Fuse Energy ({email}).",
-        "data": {
-          "code": "Verification code"
-        }
+        "data": { "code": "Verification code" }
       },
       "magic_link": {
         "title": "Magic link verification",
-        "description": "Fuse Energy sent a magic link to **{email}**.\n\n1. Open the email on a **desktop browser** (not your phone)\n2. **Right-click** the magic link → **Copy link address**\n3. Paste the full URL below\n\nThe URL will look like: `https://www.fuseenergy.com/...?token=...`",
-        "data": {
-          "magic_link_url": "Magic link URL (paste the full URL)"
-        }
+        "description": "Fuse Energy sent a magic link to **{email}**.\n\n1. Open the email on a **desktop browser**\n2. Right-click the link → **Copy link address**\n3. Paste the full URL below\n\nURL looks like: `https://www.fuseenergy.com/app/sign-in/magic-link?token=...`",
+        "data": { "magic_link_url": "Magic link URL (paste full URL)" }
       },
       "reauth_confirm": {
         "title": "Re-authenticate Fuse Energy",
-        "description": "Your Fuse Energy session has expired. Click Submit to send a new link/code to {email}."
+        "description": "Your session expired. Click Submit to send a new link to {email}."
       }
     },
     "error": {
-      "invalid_auth": "Invalid email or verification code / link token.",
-      "cannot_connect": "Unable to connect to Fuse Energy. Check your network and that api.fuseenergy.com is not blocked by DNS/Pi-hole.",
-      "unknown": "An unexpected error occurred. Check the HA logs for details.",
+      "invalid_auth": "Invalid email, verification code, or magic link token.",
+      "cannot_connect": "Unable to reach Fuse Energy API. Check that api.fuseenergy.com is not blocked by DNS/Pi-hole.",
+      "unknown": "An unexpected error occurred. Check HA logs for details.",
       "no_premises": "No premises found for this account."
     },
     "abort": {
@@ -40,17 +34,13 @@
   },
   "entity": {
     "sensor": {
-      "electricity_kwh_today": { "name": "Electricity today" },
-      "electricity_cost_today": { "name": "Electricity cost today" },
-      "gas_kwh_today": { "name": "Gas today" },
-      "gas_cost_today": { "name": "Gas cost today" },
-      "balance": { "name": "Account balance" },
-      "electricity_tariff_title": { "name": "Electricity tariff" },
-      "electricity_unit_rate": { "name": "Electricity unit rate" },
-      "electricity_standing_charge": { "name": "Electricity standing charge" },
-      "gas_tariff_title": { "name": "Gas tariff" },
-      "gas_unit_rate": { "name": "Gas unit rate" },
-      "gas_standing_charge": { "name": "Gas standing charge" }
+      "kwh_today":         { "name": "Today" },
+      "kwh_yesterday":     { "name": "Yesterday" },
+      "cost_today":        { "name": "Cost today" },
+      "tariff":            { "name": "Tariff" },
+      "unit_rate":         { "name": "Unit rate" },
+      "standing_charge":   { "name": "Standing charge" },
+      "balance":           { "name": "Balance" }
     }
   }
 }
