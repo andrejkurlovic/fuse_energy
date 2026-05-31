@@ -52,7 +52,10 @@ except (ImportError, AttributeError):
     _MEAN_TYPE_NONE = None  # type: ignore[assignment]
     _USE_MEAN_TYPE = False
 
-from homeassistant.components.recorder.statistics import async_add_external_statistics
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    statistics_during_period,
+)
 
 
 def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
@@ -110,6 +113,99 @@ def _safe_float(v: object) -> float | None:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+async def async_inject_today(
+    hass: HomeAssistant,
+    api: FuseEnergyAPI,
+    premises_fid: str,
+    supplies: list,
+) -> None:
+    """Inject today's completed hourly electricity bars on each coordinator poll.
+
+    Keeps the Energy Dashboard's grid consumption current without a manual
+    import_history call. Gas is skipped — smart meter 1-day lag means today is
+    always 0. Skips silently if no historical baseline exists (import not yet run).
+    """
+    if not premises_fid:
+        return
+
+    elec_fid = next(
+        (s.supply_fid for s in supplies if SUPPLY_ELECTRICITY in s.supply_type), None
+    )
+    if not elec_fid:
+        return
+
+    today = date.today()
+    try:
+        chart = await api.get_chart(premises_fid, today.year, today.month, today.day)
+    except FuseError:
+        return
+
+    kwh_pts: dict[datetime, float] = {}
+    cost_pts: dict[datetime, float] = {}
+
+    for supply_info in chart.get("supplies") or []:
+        if supply_info.get("supply_fid") != elec_fid:
+            continue
+        for wrapper in supply_info.get("bars") or []:
+            bar = wrapper.get("bar") or {}
+            if bar.get("type") != "REALISED":
+                continue
+            idx = bar.get("index") or {}
+            start_dt = _bar_start(idx)
+            if start_dt is None:
+                continue
+            kwh = _safe_float(bar.get("kWh"))
+            cost = _safe_float((bar.get("money") or {}).get("amount"))
+            if kwh and kwh > 0:
+                kwh_pts[start_dt] = kwh
+            if cost is not None:
+                cost_pts[start_dt] = cost
+
+    if not kwh_pts:
+        return
+
+    # Find yesterday's last cumulative sum — the baseline for today's running total.
+    # Query the 2-hour window ending at today's midnight (BST) to handle DST safely.
+    today_midnight_utc = datetime(
+        today.year, today.month, today.day, 0, 0, tzinfo=_TZ_LONDON
+    ).astimezone(_UTC)
+    window_start = today_midnight_utc - timedelta(hours=2)
+
+    def _last_sum_before_today(stat_id: str) -> float:
+        rows = statistics_during_period(
+            hass, window_start, today_midnight_utc, {stat_id}, "hour", None, {"sum"}
+        )
+        entries = rows.get(stat_id) or []
+        return float(entries[-1]["sum"]) if entries else 0.0
+
+    baseline_kwh = await hass.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_KWH)
+
+    # Only inject if historical import has been run (baseline > 0).
+    # Without a baseline, injecting with sum starting at 0 would break the
+    # cumulative series and make historical totals look wrong.
+    if baseline_kwh == 0.0:
+        return
+
+    baseline_cost = await hass.async_add_executor_job(_last_sum_before_today, STAT_ELECTRICITY_COST)
+
+    def _build(pts: dict, baseline: float, unit: str, stat_id: str) -> None:
+        cum = baseline
+        data: list[StatisticData] = []
+        for start_dt, delta in sorted(pts.items()):
+            cum += delta
+            data.append(StatisticData(start=start_dt, sum=round(cum, 6), state=round(delta, 6)))
+        async_add_external_statistics(hass, _make_metadata(stat_id, unit), data)
+
+    _build(kwh_pts, baseline_kwh, "kWh", STAT_ELECTRICITY_KWH)
+    if cost_pts and baseline_cost > 0.0:
+        _build(cost_pts, baseline_cost, "GBP", STAT_ELECTRICITY_COST)
+
+    _LOGGER.debug(
+        "FuseEnergy: injected %d today electricity bars (baseline=%.3f kWh)",
+        len(kwh_pts), baseline_kwh,
+    )
 
 
 def _next_month(d: date) -> date:

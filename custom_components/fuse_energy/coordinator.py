@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import FuseAuthError, FuseEnergyAPI, FuseError
 from .const import DOMAIN, SUPPLY_ELECTRICITY, SUPPLY_GAS
+from .statistics import async_inject_today
 
 _LOGGER = logging.getLogger(__name__)
 _SCAN_INTERVAL = timedelta(hours=1)
@@ -213,6 +214,16 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
                 self._parse_chart(supply_data_map, chart, today, yesterday)
             except FuseError:
                 _LOGGER.warning("FuseEnergy: chart fetch failed")
+
+            # Inject today's completed hourly bars into the Fuse external statistics
+            # so the Energy Dashboard grid consumption shows live data for today.
+            try:
+                await async_inject_today(
+                    self.hass, self.api, result.premises_fid,
+                    [sd.supply for sd in result.supplies],
+                )
+            except Exception:  # pylint: disable=broad-except
+                pass  # Never crash the coordinator for statistics injection
 
         # --- Balance ---
         try:
