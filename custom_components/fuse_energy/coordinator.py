@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import FuseAuthError, FuseEnergyAPI, FuseError
@@ -152,7 +153,8 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
         try:
             raw_premises = await self.api.get_premises()
         except FuseAuthError as err:
-            raise UpdateFailed(f"Auth error (re-auth needed): {err}") from err
+            # ConfigEntryAuthFailed tells HA to show re-auth notification in the UI
+            raise ConfigEntryAuthFailed(str(err)) from err
         except FuseError as err:
             raise UpdateFailed(str(err)) from err
 

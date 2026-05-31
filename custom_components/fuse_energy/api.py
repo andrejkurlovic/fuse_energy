@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiohttp
@@ -64,12 +65,16 @@ class FuseEnergyAPI:
         session: aiohttp.ClientSession,
         session_id: str | None = None,
         device_id: str | None = None,
+        on_token_refresh: Callable[[str, str | None], Awaitable[None]] | None = None,
     ) -> None:
         self._session = session
         self._session_id = session_id or str(uuid.uuid4())
         self._device_id = device_id or str(uuid.uuid4())
         self._access_token: str | None = None
         self._refresh_token: str | None = None
+        # Called after a successful silent token refresh so the caller can persist
+        # the new tokens to the config entry (prevents daily re-auth on HA restart).
+        self._on_token_refresh = on_token_refresh
 
     def set_tokens(self, access_token: str, refresh_token: str | None) -> None:
         self._access_token = access_token
@@ -225,6 +230,9 @@ class FuseEnergyAPI:
         IMPORTANT (proven by live testing): must send the OLD access_token as
         Authorization: Bearer while posting refresh_token in the body.
         Calling without the Bearer header returns 401 'missing access token'.
+
+        On success, persists new tokens via the on_token_refresh callback so
+        HA can store them in the config entry — prevents daily re-auth on restart.
         """
         if not self._refresh_token or not self._access_token:
             return False
@@ -242,6 +250,12 @@ class FuseEnergyAPI:
             new_rt = data.get("refresh_token") or (data.get("data") or {}).get("refresh_token")
             if new_rt:
                 self._refresh_token = new_rt
+            # Persist new tokens so HA doesn't lose them on restart
+            if self._on_token_refresh is not None:
+                try:
+                    await self._on_token_refresh(new_at, self._refresh_token)
+                except Exception:
+                    pass  # callback failure must not abort the refresh
             return True
         except Exception:
             return False

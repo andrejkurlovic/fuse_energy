@@ -56,6 +56,7 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
         self._session_id: str = str(uuid.uuid4())
         self._device_id: str = str(uuid.uuid4())
         self._api: FuseEnergyAPI | None = None
+        self._is_reauth: bool = False
 
     async def async_step_user(
         self, user_input: dict | None = None
@@ -109,7 +110,7 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
             except Exception:
                 errors["base"] = "unknown"
             else:
-                return await self._create_entry(tokens)
+                return await self._finish_auth(tokens)
 
         return self.async_show_form(
             step_id="otp",
@@ -146,7 +147,7 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
                 except Exception:
                     errors["base"] = "unknown"
                 else:
-                    return await self._create_entry(tokens)
+                    return await self._finish_auth(tokens)
 
         return self.async_show_form(
             step_id="magic_link",
@@ -155,8 +156,8 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"email": self._email},
         )
 
-    async def _create_entry(self, tokens: dict[str, str]) -> ConfigFlowResult:
-        """Fetch premises_fid then create the config entry."""
+    async def _finish_auth(self, tokens: dict[str, str]) -> ConfigFlowResult:
+        """Fetch premises_fid then create or update the config entry."""
         assert self._api is not None
         premises_fid = ""
         try:
@@ -173,6 +174,20 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
         except (FuseError, FuseAuthError):
             pass  # premises_fid optional — coordinator will fetch on first refresh
 
+        if self._is_reauth:
+            # Update only the auth tokens; preserve session/device IDs so the API
+            # accepts the existing session without re-registration.
+            entry = self._get_reauth_entry()
+            return self.async_update_reload_and_abort(
+                entry,
+                data_updates={
+                    CONF_ACCESS_TOKEN: tokens["access_token"],
+                    CONF_REFRESH_TOKEN: tokens["refresh_token"],
+                    CONF_PREMISES_FID: premises_fid or entry.data.get(CONF_PREMISES_FID, ""),
+                },
+                reason="reauth_successful",
+            )
+
         await self.async_set_unique_id(self._email)
         self._abort_if_unique_id_configured()
         return self.async_create_entry(
@@ -187,13 +202,22 @@ class FuseEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
+    # ------------------------------------------------------------------
+    # Re-auth flow
+    # ------------------------------------------------------------------
+
     async def async_step_reauth(self, entry_data: dict) -> ConfigFlowResult:
+        """HA triggers this when ConfigEntryAuthFailed is raised by the coordinator."""
+        self._is_reauth = True
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict | None = None
     ) -> ConfigFlowResult:
+        """Show a single-click form, then send a new magic link / OTP to the account email."""
         entry = self._get_reauth_entry()
+        # Preserve session/device IDs from the existing entry so the Fuse backend
+        # recognises this as the same device session.
         self._email = entry.data.get(CONF_EMAIL, "")
         self._session_id = entry.data.get(CONF_SESSION_ID, str(uuid.uuid4()))
         self._device_id = entry.data.get(CONF_DEVICE_ID, str(uuid.uuid4()))

@@ -1,0 +1,63 @@
+import_history:
+  name: Import history
+  description: >
+    Import historical energy usage from the Fuse Energy API into HA long-term statistics.
+    Only REALISED bars are imported (not forecasts).
+    Run with dry_run: true first to verify the data range before committing.
+    Results are written to the HA log (check Logger or system log after the call).
+  fields:
+    start_date:
+      name: Start date
+      description: >
+        Earliest date to import (YYYY-MM-DD).
+        Defaults to 2025-09-09 (the proven Fuse switch-in date).
+      example: "2025-09-09"
+      selector:
+        text:
+    end_date:
+      name: End date
+      description: >
+        Latest date to import (YYYY-MM-DD).
+        Defaults to yesterday (today's data may be incomplete).
+      example: "2026-05-30"
+      selector:
+        text:
+    include_electricity:
+      name: Include electricity
+      description: Import electricity kWh and cost statistics.
+      default: true
+      selector:
+        boolean:
+    include_gas:
+      name: Include gas
+      description: Import gas kWh and cost statistics.
+      default: true
+      selector:
+        boolean:
+    include_cost:
+      name: Include cost
+      description: Import cost (GBP) alongside energy (kWh).
+      default: true
+      selector:
+        boolean:
+    granularity:
+      name: Granularity
+      description: >
+        Time resolution for electricity data.
+        auto/hourly: fetches 24 hourly bars per day (~1 API call/day).
+        daily: fetches daily totals only (~1 API call/month). Gas is always daily.
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - daily
+            - hourly
+    dry_run:
+      name: Dry run
+      description: >
+        If true, fetch and log what would be imported without writing to HA.
+        Always run dry_run: true first, then set to false to commit.
+      default: true
+      selector:
+        boolean:

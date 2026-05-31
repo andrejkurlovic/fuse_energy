@@ -1,4 +1,5 @@
 """Constants for Fuse Energy+ integration."""
+from datetime import date
 
 DOMAIN = "fuse_energy"
 
@@ -21,3 +22,15 @@ USER_AGENT = f"Mobile/Android/{_APP_VERSION}/{_APP_BUILD}"
 # (NOT "ELECTRICITY_IMPORT" — real value is "ELEC_IMPORT")
 SUPPLY_ELECTRICITY = "ELEC_IMPORT"
 SUPPLY_GAS = "GAS"
+
+# Long-term statistics IDs (source:name format required by HA)
+STAT_ELECTRICITY_KWH = f"{DOMAIN}:electricity_import_kwh"
+STAT_ELECTRICITY_COST = f"{DOMAIN}:electricity_import_cost"
+STAT_GAS_KWH = f"{DOMAIN}:gas_import_kwh"
+STAT_GAS_COST = f"{DOMAIN}:gas_import_cost"
+
+# Service name
+SERVICE_IMPORT_HISTORY = "import_history"
+
+# Earliest date for which Fuse API has REALISED data (proven from live testing)
+SWITCH_IN_DATE = date(2025, 9, 9)
