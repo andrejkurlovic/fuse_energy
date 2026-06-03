@@ -137,6 +137,8 @@ async def async_inject_gas_yesterday(
     api: FuseEnergyAPI,
     premises_fid: str,
     supplies: list,
+    *,
+    current_month_chart: dict | None = None,
 ) -> None:
     """Backfill gas kWh, gas cost, and electricity cost from the monthly chart.
 
@@ -146,10 +148,14 @@ async def async_inject_gas_yesterday(
     Electricity kWh is excluded — async_inject_today keeps that series current
     at hourly resolution.
 
+    current_month_chart: the coordinator's already-fetched monthly chart for the
+    current month.  Reusing it avoids an extra API call (and any rate-limit risk)
+    for the common case where only the current month is needed.  Previous months
+    are still fetched via the API as needed.
+
     Accepts any non-FORECAST bar type (recent data is PROVISIONAL until settled).
     Skips silently when no baseline exists (import_history not yet run).
     """
-    _LOGGER.warning("FuseEnergy backfill: ENTER async_inject_gas_yesterday")
     if not premises_fid:
         return
 
@@ -179,25 +185,14 @@ async def async_inject_gas_yesterday(
     (gas_kwh_last, gas_kwh_base), (gas_cost_last, gas_cost_base), (elec_cost_last, elec_cost_base) = \
         await recorder.async_add_executor_job(_get_all_baselines)
 
-    _LOGGER.warning(
-        "FuseEnergy backfill diag: gas_kwh=%s/%.2f  gas_cost=%s/%.2f  elec_cost=%s/%.2f  yesterday=%s",
-        gas_kwh_last, gas_kwh_base, gas_cost_last, gas_cost_base,
-        elec_cost_last, elec_cost_base, yesterday,
-    )
-
     # Require at least gas kWh baseline — signals import_history has been run.
     if gas_kwh_last is None:
         return
 
     # Per-series fill windows (None means nothing to do for that series)
-    gas_kwh_fill  = (gas_kwh_last  + timedelta(days=1)) if gas_kwh_last  < yesterday else None
-    gas_cost_fill = (gas_cost_last + timedelta(days=1)) if gas_cost_last is not None and gas_cost_last  < yesterday else None
+    gas_kwh_fill   = (gas_kwh_last   + timedelta(days=1)) if gas_kwh_last  < yesterday else None
+    gas_cost_fill  = (gas_cost_last  + timedelta(days=1)) if gas_cost_last  is not None and gas_cost_last  < yesterday else None
     elec_cost_fill = (elec_cost_last + timedelta(days=1)) if elec_cost_last is not None and elec_cost_last < yesterday else None
-
-    _LOGGER.warning(
-        "FuseEnergy backfill diag: gas_kwh_fill=%s  gas_cost_fill=%s  elec_cost_fill=%s",
-        gas_kwh_fill, gas_cost_fill, elec_cost_fill,
-    )
 
     if gas_kwh_fill is None and gas_cost_fill is None and elec_cost_fill is None:
         return  # All series current
@@ -217,11 +212,16 @@ async def async_inject_gas_yesterday(
     elec_cost_pts: dict[datetime, float] = {}
 
     for year, month in sorted(months_needed):
-        try:
-            chart = await api.get_chart(premises_fid, year, month)
-        except FuseError:
-            _LOGGER.warning("FuseEnergy backfill: chart %d-%02d failed", year, month)
-            continue
+        # Reuse the coordinator's pre-fetched chart for the current month to avoid
+        # an extra API call.  Fall back to a fresh API call for previous months.
+        if current_month_chart is not None and year == today.year and month == today.month:
+            chart: dict = current_month_chart
+        else:
+            try:
+                chart = await api.get_chart(premises_fid, year, month)
+            except FuseError:
+                _LOGGER.warning("FuseEnergy backfill: chart %d-%02d failed", year, month)
+                continue
 
         for supply_info in chart.get("supplies") or []:
             sfid = supply_info.get("supply_fid")
@@ -271,20 +271,14 @@ async def async_inject_gas_yesterday(
         async_add_external_statistics(hass, _make_metadata(stat_id, unit), data)
         injected.append(f"{label}={len(data)}d")
 
-    _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,          "gas_kwh")
+    _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,      "gas_kwh")
     if gas_cost_base > 0:
-        _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,     "gas_cost")
+        _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,  "gas_cost")
     if elec_cost_base > 0:
         _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
 
-    _LOGGER.warning(
-        "FuseEnergy backfill diag: gas_kwh_pts=%d  gas_cost_pts=%d  elec_cost_pts=%d",
-        len(gas_kwh_pts), len(gas_cost_pts), len(elec_cost_pts),
-    )
     if injected:
-        _LOGGER.warning("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
-    else:
-        _LOGGER.warning("FuseEnergy: daily backfill found nothing to inject")
+        _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
 
 
 async def async_inject_today(

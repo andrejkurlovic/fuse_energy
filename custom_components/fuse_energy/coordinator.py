@@ -225,17 +225,17 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
             except Exception:  # pylint: disable=broad-except
                 pass  # Never crash the coordinator for statistics injection
 
-            # Backfill any gas days that have accumulated since the last
-            # import_history run.  Gas bars may be PROVISIONAL for a day or two
-            # before settling, so this also picks up days that import_history
-            # previously skipped due to the REALISED-only filter.
+            # Backfill any gas/cost days that have accumulated since the last
+            # import_history run.  Reuses the already-fetched monthly chart so
+            # no extra API call is needed for the common (current-month) case.
             try:
                 await async_inject_gas_yesterday(
                     self.hass, self.api, result.premises_fid,
                     [sd.supply for sd in result.supplies],
+                    current_month_chart=chart,
                 )
-            except Exception as _exc:  # pylint: disable=broad-except
-                _LOGGER.warning("FuseEnergy: gas backfill exception: %s", _exc)
+            except Exception:  # pylint: disable=broad-except
+                pass  # Never crash the coordinator for statistics injection
 
         # --- Balance ---
         try:
