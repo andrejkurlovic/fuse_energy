@@ -289,17 +289,28 @@ async def async_inject_gas_yesterday(
         async_add_external_statistics(hass, _make_metadata(stat_id, unit), data)
         injected.append(f"{label}={len(data)}d")
 
-    _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,      "gas_kwh")
+    inject_error: str = ""
+    try:
+        _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,      "gas_kwh")
+    except Exception as exc:
+        inject_error += f"gas_kwh_err={exc!r};"
     if gas_cost_base > 0:
-        _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,  "gas_cost")
+        try:
+            _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,  "gas_cost")
+        except Exception as exc:
+            inject_error += f"gas_cost_err={exc!r};"
     if elec_cost_base > 0:
-        _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
+        try:
+            _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
+        except Exception as exc:
+            inject_error += f"elec_cost_err={exc!r};"
 
     # Debug marker C: after injection
-    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.25_done", {
+    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.26_done", {
         "injected": str(injected),
         "gas_cost_pts": len(gas_cost_pts),
         "elec_cost_pts": len(elec_cost_pts),
+        "error": inject_error or "none",
     })
     if injected:
         _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
