@@ -363,7 +363,8 @@ async def async_inject_today(
 
         # Fallback: get_last_statistics fetches the N most-recent rows regardless
         # of time. Filter to entries whose start is strictly before today's midnight.
-        last = get_last_statistics(hass, 5, stat_id, True, {"sum"})
+        # Use 50 to look past any same-day hourly entries and find the last daily entry.
+        last = get_last_statistics(hass, 50, stat_id, True, {"sum"})
         for row in last.get(stat_id) or []:
             start = row.get("start")
             if start is None:
