@@ -62,8 +62,11 @@ from homeassistant.components.recorder.statistics import (
 
 def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
     name = _STAT_NAMES[statistic_id]
-    # unit_class required from HA 2026.11; "energy" for kWh, "monetary" for GBP
-    unit_class = "energy" if unit == "kWh" else "monetary"
+    # unit_class: "energy" for kWh. "monetary" is unsupported before HA 2026.11
+    # so only pass unit_class for energy units; omit it for GBP.
+    kwargs: dict = {}
+    if unit == "kWh":
+        kwargs["unit_class"] = "energy"
     if _USE_MEAN_TYPE:
         return StatisticMetaData(
             source=DOMAIN,
@@ -72,7 +75,7 @@ def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
             unit_of_measurement=unit,
             has_sum=True,
             mean_type=_MEAN_TYPE_NONE,
-            unit_class=unit_class,
+            **kwargs,
         )
     return StatisticMetaData(
         source=DOMAIN,
@@ -81,7 +84,7 @@ def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
         unit_of_measurement=unit,
         has_sum=True,
         has_mean=False,
-        unit_class=unit_class,
+        **kwargs,
     )
 
 
@@ -206,14 +209,6 @@ async def async_inject_gas_yesterday(
         months_needed.add((d.year, d.month))
         d += timedelta(days=1)
 
-    # Debug marker A: before chart loop (v2026.6.24)
-    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.24_before_chart", {
-        "gas_kwh_fill": str(gas_kwh_fill),
-        "gas_cost_fill": str(gas_cost_fill),
-        "elec_cost_fill": str(elec_cost_fill),
-        "months_needed": sorted(months_needed),
-    })
-
     # buckets: start_dt → delta value, collected only for dates in each series' window
     gas_kwh_pts:  dict[datetime, float] = {}
     gas_cost_pts: dict[datetime, float] = {}
@@ -269,13 +264,6 @@ async def async_inject_gas_yesterday(
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning("FuseEnergy backfill: bar processing %d-%02d failed: %s", year, month, exc)
 
-    # Debug marker B: after chart loop, before injection
-    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.25_after_chart", {
-        "gas_kwh_pts": len(gas_kwh_pts),
-        "gas_cost_pts": len(gas_cost_pts),
-        "elec_cost_pts": len(elec_cost_pts),
-    })
-
     injected: list[str] = []
 
     def _inject(pts: dict, baseline: float, unit: str, stat_id: str, label: str) -> None:
@@ -289,29 +277,12 @@ async def async_inject_gas_yesterday(
         async_add_external_statistics(hass, _make_metadata(stat_id, unit), data)
         injected.append(f"{label}={len(data)}d")
 
-    inject_error: str = ""
-    try:
-        _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,      "gas_kwh")
-    except Exception as exc:
-        inject_error += f"gas_kwh_err={exc!r};"
+    _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,      "gas_kwh")
     if gas_cost_base > 0:
-        try:
-            _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,  "gas_cost")
-        except Exception as exc:
-            inject_error += f"gas_cost_err={exc!r};"
+        _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,  "gas_cost")
     if elec_cost_base > 0:
-        try:
-            _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
-        except Exception as exc:
-            inject_error += f"elec_cost_err={exc!r};"
+        _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
 
-    # Debug marker C: after injection
-    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.26_done", {
-        "injected": str(injected),
-        "gas_cost_pts": len(gas_cost_pts),
-        "elec_cost_pts": len(elec_cost_pts),
-        "error": inject_error or "none",
-    })
     if injected:
         _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
 
