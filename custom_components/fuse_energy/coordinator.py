@@ -215,24 +215,24 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
             except FuseError:
                 _LOGGER.warning("FuseEnergy: chart fetch failed")
 
+            # Backfill any gas/cost days that have accumulated since the last
+            # import_history run.  Run this FIRST so that async_inject_today
+            # sees the correct cumulative baseline when it injects today's hours.
+            try:
+                await async_inject_gas_yesterday(
+                    self.hass, self.api, result.premises_fid,
+                    [sd.supply for sd in result.supplies],
+                    current_month_chart=chart,
+                )
+            except Exception:  # pylint: disable=broad-except
+                pass  # Never crash the coordinator for statistics injection
+
             # Inject today's completed hourly bars into the Fuse external statistics
             # so the Energy Dashboard grid consumption shows live data for today.
             try:
                 await async_inject_today(
                     self.hass, self.api, result.premises_fid,
                     [sd.supply for sd in result.supplies],
-                )
-            except Exception:  # pylint: disable=broad-except
-                pass  # Never crash the coordinator for statistics injection
-
-            # Backfill any gas/cost days that have accumulated since the last
-            # import_history run.  Reuses the already-fetched monthly chart so
-            # no extra API call is needed for the common (current-month) case.
-            try:
-                await async_inject_gas_yesterday(
-                    self.hass, self.api, result.premises_fid,
-                    [sd.supply for sd in result.supplies],
-                    current_month_chart=chart,
                 )
             except Exception:  # pylint: disable=broad-except
                 pass  # Never crash the coordinator for statistics injection
