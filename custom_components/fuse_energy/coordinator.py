@@ -234,8 +234,8 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
                     self.hass, self.api, result.premises_fid,
                     [sd.supply for sd in result.supplies],
                 )
-            except Exception:  # pylint: disable=broad-except
-                pass  # Never crash the coordinator for statistics injection
+            except Exception as _exc:  # pylint: disable=broad-except
+                _LOGGER.warning("FuseEnergy: gas backfill exception: %s", _exc)
 
         # --- Balance ---
         try:

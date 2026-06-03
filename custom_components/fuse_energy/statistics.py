@@ -149,6 +149,7 @@ async def async_inject_gas_yesterday(
     Accepts any non-FORECAST bar type (recent data is PROVISIONAL until settled).
     Skips silently when no baseline exists (import_history not yet run).
     """
+    _LOGGER.warning("FuseEnergy backfill: ENTER async_inject_gas_yesterday")
     if not premises_fid:
         return
 
