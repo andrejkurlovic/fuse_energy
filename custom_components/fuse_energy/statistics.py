@@ -178,6 +178,12 @@ async def async_inject_gas_yesterday(
     (gas_kwh_last, gas_kwh_base), (gas_cost_last, gas_cost_base), (elec_cost_last, elec_cost_base) = \
         await recorder.async_add_executor_job(_get_all_baselines)
 
+    _LOGGER.warning(
+        "FuseEnergy backfill diag: gas_kwh=%s/%.2f  gas_cost=%s/%.2f  elec_cost=%s/%.2f  yesterday=%s",
+        gas_kwh_last, gas_kwh_base, gas_cost_last, gas_cost_base,
+        elec_cost_last, elec_cost_base, yesterday,
+    )
+
     # Require at least gas kWh baseline — signals import_history has been run.
     if gas_kwh_last is None:
         return
@@ -186,6 +192,11 @@ async def async_inject_gas_yesterday(
     gas_kwh_fill  = (gas_kwh_last  + timedelta(days=1)) if gas_kwh_last  < yesterday else None
     gas_cost_fill = (gas_cost_last + timedelta(days=1)) if gas_cost_last is not None and gas_cost_last  < yesterday else None
     elec_cost_fill = (elec_cost_last + timedelta(days=1)) if elec_cost_last is not None and elec_cost_last < yesterday else None
+
+    _LOGGER.warning(
+        "FuseEnergy backfill diag: gas_kwh_fill=%s  gas_cost_fill=%s  elec_cost_fill=%s",
+        gas_kwh_fill, gas_cost_fill, elec_cost_fill,
+    )
 
     if gas_kwh_fill is None and gas_cost_fill is None and elec_cost_fill is None:
         return  # All series current
@@ -265,8 +276,14 @@ async def async_inject_gas_yesterday(
     if elec_cost_base > 0:
         _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
 
+    _LOGGER.warning(
+        "FuseEnergy backfill diag: gas_kwh_pts=%d  gas_cost_pts=%d  elec_cost_pts=%d",
+        len(gas_kwh_pts), len(gas_cost_pts), len(elec_cost_pts),
+    )
     if injected:
-        _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
+        _LOGGER.warning("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
+    else:
+        _LOGGER.warning("FuseEnergy: daily backfill found nothing to inject")
 
 
 async def async_inject_today(
