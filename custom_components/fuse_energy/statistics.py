@@ -117,22 +117,37 @@ def _safe_float(v: object) -> float | None:
         return None
 
 
+def _last_stat_date_and_sum(hass: HomeAssistant, stat_id: str) -> tuple[date | None, float]:
+    """Return (last_date, cumulative_sum) for a statistic ID, or (None, 0) if empty."""
+    rows = get_last_statistics(hass, 1, stat_id, True, {"sum", "start"})
+    lst = rows.get(stat_id) or []
+    if not lst:
+        return None, 0.0
+    row = lst[0]
+    start = row.get("start")
+    if start is None:
+        return None, 0.0
+    start_ts = start.timestamp() if isinstance(start, datetime) else float(start)
+    last_dt = datetime.fromtimestamp(start_ts, tz=_TZ_LONDON).date()
+    return last_dt, float(row.get("sum") or 0.0)
+
+
 async def async_inject_gas_yesterday(
     hass: HomeAssistant,
     api: FuseEnergyAPI,
     premises_fid: str,
     supplies: list,
 ) -> None:
-    """Inject completed gas days missing from long-term statistics.
+    """Backfill gas kWh, gas cost, and electricity cost from the monthly chart.
 
-    Gas smart meters report with a ~1-day lag, so we backfill up to yesterday on
-    every coordinator poll.  This closes the growing gap that builds when
-    import_history is not re-run manually.
+    Each of the three series is tracked and filled independently — a cost series
+    that lags behind its kWh counterpart is healed on the same poll.
 
-    Accepts any non-FORECAST bar type — recent gas bars may be PROVISIONAL rather
-    than REALISED before the meter settles, and the coordinator already shows them.
+    Electricity kWh is excluded — async_inject_today keeps that series current
+    at hourly resolution.
 
-    Skips silently when no historical baseline exists (import_history not yet run).
+    Accepts any non-FORECAST bar type (recent data is PROVISIONAL until settled).
+    Skips silently when no baseline exists (import_history not yet run).
     """
     if not premises_fid:
         return
@@ -140,59 +155,70 @@ async def async_inject_gas_yesterday(
     gas_fid = next(
         (s.supply_fid for s in supplies if SUPPLY_GAS in s.supply_type), None
     )
-    if not gas_fid:
-        return
+    elec_fid = next(
+        (s.supply_fid for s in supplies if SUPPLY_ELECTRICITY in s.supply_type), None
+    )
 
     today = date.today()
     yesterday = today - timedelta(days=1)
 
     recorder = _get_recorder(hass)
 
-    def _last_gas_stat() -> tuple[date | None, float, float]:
-        kwh_rows = get_last_statistics(hass, 1, STAT_GAS_KWH, True, {"sum", "start"})
-        cost_rows = get_last_statistics(hass, 1, STAT_GAS_COST, True, {"sum"})
-        kwh_list = kwh_rows.get(STAT_GAS_KWH) or []
-        if not kwh_list:
-            return None, 0.0, 0.0
-        row = kwh_list[0]
-        start = row.get("start")
-        if start is None:
-            return None, 0.0, 0.0
-        start_ts = start.timestamp() if isinstance(start, datetime) else float(start)
-        last_dt = datetime.fromtimestamp(start_ts, tz=_TZ_LONDON).date()
-        kwh_sum = float(row.get("sum") or 0.0)
-        cost_list = cost_rows.get(STAT_GAS_COST) or []
-        cost_sum = float(cost_list[0].get("sum") or 0.0) if cost_list else 0.0
-        return last_dt, kwh_sum, cost_sum
+    def _get_all_baselines() -> tuple[
+        tuple[date | None, float],
+        tuple[date | None, float],
+        tuple[date | None, float],
+    ]:
+        return (
+            _last_stat_date_and_sum(hass, STAT_GAS_KWH),
+            _last_stat_date_and_sum(hass, STAT_GAS_COST),
+            _last_stat_date_and_sum(hass, STAT_ELECTRICITY_COST),
+        )
 
-    last_date, kwh_baseline, cost_baseline = await recorder.async_add_executor_job(_last_gas_stat)
+    (gas_kwh_last, gas_kwh_base), (gas_cost_last, gas_cost_base), (elec_cost_last, elec_cost_base) = \
+        await recorder.async_add_executor_job(_get_all_baselines)
 
-    if last_date is None:
-        return  # import_history not yet run — no baseline
+    # Require at least gas kWh baseline — signals import_history has been run.
+    if gas_kwh_last is None:
+        return
 
-    if last_date >= yesterday:
-        return  # Already current
+    # Per-series fill windows (None means nothing to do for that series)
+    gas_kwh_fill  = (gas_kwh_last  + timedelta(days=1)) if gas_kwh_last  < yesterday else None
+    gas_cost_fill = (gas_cost_last + timedelta(days=1)) if gas_cost_last is not None and gas_cost_last  < yesterday else None
+    elec_cost_fill = (elec_cost_last + timedelta(days=1)) if elec_cost_last is not None and elec_cost_last < yesterday else None
 
-    fill_start = last_date + timedelta(days=1)
+    if gas_kwh_fill is None and gas_cost_fill is None and elec_cost_fill is None:
+        return  # All series current
 
+    # Months needed across all active fill windows
+    fill_starts = [f for f in (gas_kwh_fill, gas_cost_fill, elec_cost_fill) if f is not None]
+    overall_start = min(fill_starts)
     months_needed: set[tuple[int, int]] = set()
-    d = fill_start
+    d = overall_start
     while d <= yesterday:
         months_needed.add((d.year, d.month))
         d += timedelta(days=1)
 
-    kwh_pts: dict[datetime, float] = {}
-    cost_pts: dict[datetime, float] = {}
+    # buckets: start_dt → delta value, collected only for dates in each series' window
+    gas_kwh_pts:  dict[datetime, float] = {}
+    gas_cost_pts: dict[datetime, float] = {}
+    elec_cost_pts: dict[datetime, float] = {}
 
     for year, month in sorted(months_needed):
         try:
             chart = await api.get_chart(premises_fid, year, month)
         except FuseError:
-            _LOGGER.warning("FuseEnergy gas backfill: chart %d-%02d failed", year, month)
+            _LOGGER.warning("FuseEnergy backfill: chart %d-%02d failed", year, month)
             continue
+
         for supply_info in chart.get("supplies") or []:
-            if supply_info.get("supply_fid") != gas_fid:
+            sfid = supply_info.get("supply_fid")
+            is_gas = sfid == gas_fid
+            is_elec = sfid == elec_fid
+
+            if not is_gas and not is_elec:
                 continue
+
             for wrapper in supply_info.get("bars") or []:
                 bar = wrapper.get("bar") or {}
                 bar_type = bar.get("type", "")
@@ -200,44 +226,47 @@ async def async_inject_gas_yesterday(
                     continue
                 idx = bar.get("index") or {}
                 bar_date = _index_to_date(idx)
-                if bar_date is None or bar_date < fill_start or bar_date > yesterday:
+                if bar_date is None or bar_date > yesterday:
                     continue
                 start_dt = _bar_start(idx)
                 if start_dt is None:
                     continue
-                kwh = _safe_float(bar.get("kWh"))
+                kwh  = _safe_float(bar.get("kWh"))
                 cost = _safe_float((bar.get("money") or {}).get("amount"))
-                if kwh is not None and kwh > 0:
-                    kwh_pts[start_dt] = kwh
-                if cost is not None and cost >= 0:
-                    cost_pts[start_dt] = cost
 
-    if not kwh_pts:
-        _LOGGER.debug(
-            "FuseEnergy gas backfill: no bars found for %s – %s (API may not have data yet)",
-            fill_start, yesterday,
-        )
-        return
+                if is_gas:
+                    if gas_kwh_fill and bar_date >= gas_kwh_fill:
+                        if kwh is not None and kwh > 0:
+                            gas_kwh_pts[start_dt] = kwh
+                    if gas_cost_fill and bar_date >= gas_cost_fill:
+                        if cost is not None and cost >= 0:
+                            gas_cost_pts[start_dt] = cost
+                elif is_elec:
+                    if elec_cost_fill and bar_date >= elec_cost_fill:
+                        if cost is not None and cost >= 0:
+                            elec_cost_pts[start_dt] = cost
 
-    cum = kwh_baseline
-    kwh_data: list[StatisticData] = []
-    for start_dt, delta in sorted(kwh_pts.items()):
-        cum += delta
-        kwh_data.append(StatisticData(start=start_dt, sum=round(cum, 6), state=round(delta, 6)))
-    async_add_external_statistics(hass, _make_metadata(STAT_GAS_KWH, "kWh"), kwh_data)
+    injected: list[str] = []
 
-    if cost_pts and cost_baseline > 0:
-        cum = cost_baseline
-        cost_data: list[StatisticData] = []
-        for start_dt, delta in sorted(cost_pts.items()):
+    def _inject(pts: dict, baseline: float, unit: str, stat_id: str, label: str) -> None:
+        if not pts:
+            return
+        cum = baseline
+        data: list[StatisticData] = []
+        for start_dt, delta in sorted(pts.items()):
             cum += delta
-            cost_data.append(StatisticData(start=start_dt, sum=round(cum, 6), state=round(delta, 6)))
-        async_add_external_statistics(hass, _make_metadata(STAT_GAS_COST, "GBP"), cost_data)
+            data.append(StatisticData(start=start_dt, sum=round(cum, 6), state=round(delta, 6)))
+        async_add_external_statistics(hass, _make_metadata(stat_id, unit), data)
+        injected.append(f"{label}={len(data)}d")
 
-    _LOGGER.info(
-        "FuseEnergy: gas backfill injected %d days (%s to %s)",
-        len(kwh_data), fill_start, yesterday,
-    )
+    _inject(gas_kwh_pts,   gas_kwh_base,   "kWh", STAT_GAS_KWH,          "gas_kwh")
+    if gas_cost_base > 0:
+        _inject(gas_cost_pts,  gas_cost_base,  "GBP", STAT_GAS_COST,     "gas_cost")
+    if elec_cost_base > 0:
+        _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
+
+    if injected:
+        _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
 
 
 async def async_inject_today(
