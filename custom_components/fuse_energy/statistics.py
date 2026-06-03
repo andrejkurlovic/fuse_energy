@@ -206,8 +206,8 @@ async def async_inject_gas_yesterday(
         months_needed.add((d.year, d.month))
         d += timedelta(days=1)
 
-    # Debug marker A: before chart loop
-    hass.states.async_set("sensor.fuse_backfill_debug", "before_chart", {
+    # Debug marker A: before chart loop (v2026.6.24)
+    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.24_before_chart", {
         "gas_kwh_fill": str(gas_kwh_fill),
         "gas_cost_fill": str(gas_cost_fill),
         "elec_cost_fill": str(elec_cost_fill),
@@ -231,40 +231,43 @@ async def async_inject_gas_yesterday(
             _LOGGER.warning("FuseEnergy backfill: chart %d-%02d failed: %s", year, month, exc)
             continue
 
-        for supply_info in chart.get("supplies") or []:
-            sfid = supply_info.get("supply_fid")
-            is_gas = sfid == gas_fid
-            is_elec = sfid == elec_fid
+        try:
+            for supply_info in chart.get("supplies") or []:
+                sfid = supply_info.get("supply_fid")
+                is_gas = sfid == gas_fid
+                is_elec = sfid == elec_fid
 
-            if not is_gas and not is_elec:
-                continue
-
-            for wrapper in supply_info.get("bars") or []:
-                bar = wrapper.get("bar") or {}
-                idx = bar.get("index") or {}
-                bar_date = _index_to_date(idx)
-                # Date is the only guard — the Fuse API labels recent settled bars as
-                # "FORECAST" (preliminary), same as the coordinator's _parse_chart does
-                # (no type filter). Trusting the date boundary keeps parity with sensors.
-                if bar_date is None or bar_date > yesterday:
+                if not is_gas and not is_elec:
                     continue
-                start_dt = _bar_start(idx)
-                if start_dt is None:
-                    continue
-                kwh  = _safe_float(bar.get("kWh"))
-                cost = _safe_float((bar.get("money") or {}).get("amount"))
 
-                if is_gas:
-                    if gas_kwh_fill and bar_date >= gas_kwh_fill:
-                        if kwh is not None and kwh > 0:
-                            gas_kwh_pts[start_dt] = kwh
-                    if gas_cost_fill and bar_date >= gas_cost_fill:
-                        if cost is not None and cost >= 0:
-                            gas_cost_pts[start_dt] = cost
-                elif is_elec:
-                    if elec_cost_fill and bar_date >= elec_cost_fill:
-                        if cost is not None and cost >= 0:
-                            elec_cost_pts[start_dt] = cost
+                for wrapper in supply_info.get("bars") or []:
+                    bar = wrapper.get("bar") or {}
+                    idx = bar.get("index") or {}
+                    bar_date = _index_to_date(idx)
+                    # Date is the only guard — the Fuse API labels recent settled bars as
+                    # "FORECAST" (preliminary), same as the coordinator's _parse_chart does
+                    # (no type filter). Trusting the date boundary keeps parity with sensors.
+                    if bar_date is None or bar_date > yesterday:
+                        continue
+                    start_dt = _bar_start(idx)
+                    if start_dt is None:
+                        continue
+                    kwh  = _safe_float(bar.get("kWh"))
+                    cost = _safe_float((bar.get("money") or {}).get("amount"))
+
+                    if is_gas:
+                        if gas_kwh_fill and bar_date >= gas_kwh_fill:
+                            if kwh is not None and kwh > 0:
+                                gas_kwh_pts[start_dt] = kwh
+                        if gas_cost_fill and bar_date >= gas_cost_fill:
+                            if cost is not None and cost >= 0:
+                                gas_cost_pts[start_dt] = cost
+                    elif is_elec:
+                        if elec_cost_fill and bar_date >= elec_cost_fill:
+                            if cost is not None and cost >= 0:
+                                elec_cost_pts[start_dt] = cost
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.warning("FuseEnergy backfill: bar processing %d-%02d failed: %s", year, month, exc)
 
     injected: list[str] = []
 
