@@ -222,14 +222,14 @@ async def async_inject_gas_yesterday(
     for year, month in sorted(months_needed):
         # Reuse the coordinator's pre-fetched chart for the current month to avoid
         # an extra API call.  Fall back to a fresh API call for previous months.
-        if current_month_chart is not None and year == today.year and month == today.month:
-            chart: dict = current_month_chart
-        else:
-            try:
+        try:
+            if current_month_chart is not None and year == today.year and month == today.month:
+                chart: dict = current_month_chart
+            else:
                 chart = await api.get_chart(premises_fid, year, month)
-            except FuseError:
-                _LOGGER.warning("FuseEnergy backfill: chart %d-%02d failed", year, month)
-                continue
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.warning("FuseEnergy backfill: chart %d-%02d failed: %s", year, month, exc)
+            continue
 
         for supply_info in chart.get("supplies") or []:
             sfid = supply_info.get("supply_fid")
