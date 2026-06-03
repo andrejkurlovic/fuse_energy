@@ -233,11 +233,11 @@ async def async_inject_gas_yesterday(
 
             for wrapper in supply_info.get("bars") or []:
                 bar = wrapper.get("bar") or {}
-                bar_type = bar.get("type", "")
-                if bar_type == "FORECAST" or not bar_type:
-                    continue
                 idx = bar.get("index") or {}
                 bar_date = _index_to_date(idx)
+                # Date is the only guard — the Fuse API labels recent settled bars as
+                # "FORECAST" (preliminary), same as the coordinator's _parse_chart does
+                # (no type filter). Trusting the date boundary keeps parity with sensors.
                 if bar_date is None or bar_date > yesterday:
                     continue
                 start_dt = _bar_start(idx)
@@ -497,12 +497,11 @@ async def async_run_import(
             for wrapper in supply_info.get("bars") or []:
                 bar = wrapper.get("bar") or {}
                 bar_type = bar.get("type", "")
-                # Electricity: require REALISED only.
-                # Gas: accept any confirmed type (PROVISIONAL, ESTIMATED, etc.) —
-                # recent gas bars may not settle to REALISED for a day or two.
+                # Electricity: require REALISED — historical bars are all confirmed.
+                # Gas: accept any bar type.  The Fuse API labels recently settled gas
+                # bars as "FORECAST" (preliminary), so type-filtering silently drops
+                # valid recent data.  The date range is the only guard for gas.
                 if is_elec and bar_type != "REALISED":
-                    continue
-                if is_gas and (bar_type == "FORECAST" or not bar_type):
                     continue
                 idx = bar.get("index") or {}
                 bar_date = _index_to_date(idx)
