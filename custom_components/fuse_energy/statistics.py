@@ -206,6 +206,14 @@ async def async_inject_gas_yesterday(
         months_needed.add((d.year, d.month))
         d += timedelta(days=1)
 
+    # Debug marker A: before chart loop
+    hass.states.async_set("sensor.fuse_backfill_debug", "before_chart", {
+        "gas_kwh_fill": str(gas_kwh_fill),
+        "gas_cost_fill": str(gas_cost_fill),
+        "elec_cost_fill": str(elec_cost_fill),
+        "months_needed": sorted(months_needed),
+    })
+
     # buckets: start_dt → delta value, collected only for dates in each series' window
     gas_kwh_pts:  dict[datetime, float] = {}
     gas_cost_pts: dict[datetime, float] = {}
