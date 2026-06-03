@@ -269,6 +269,13 @@ async def async_inject_gas_yesterday(
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning("FuseEnergy backfill: bar processing %d-%02d failed: %s", year, month, exc)
 
+    # Debug marker B: after chart loop, before injection
+    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.25_after_chart", {
+        "gas_kwh_pts": len(gas_kwh_pts),
+        "gas_cost_pts": len(gas_cost_pts),
+        "elec_cost_pts": len(elec_cost_pts),
+    })
+
     injected: list[str] = []
 
     def _inject(pts: dict, baseline: float, unit: str, stat_id: str, label: str) -> None:
@@ -288,19 +295,11 @@ async def async_inject_gas_yesterday(
     if elec_cost_base > 0:
         _inject(elec_cost_pts, elec_cost_base, "GBP", STAT_ELECTRICITY_COST, "elec_cost")
 
-    # Temporary debug: expose what the function found via a state entity
-    hass.states.async_set("sensor.fuse_backfill_debug", "done", {
-        "gas_kwh_pts": len(gas_kwh_pts),
+    # Debug marker C: after injection
+    hass.states.async_set("sensor.fuse_backfill_debug", "v2026.6.25_done", {
+        "injected": str(injected),
         "gas_cost_pts": len(gas_cost_pts),
         "elec_cost_pts": len(elec_cost_pts),
-        "gas_cost_fill": str(gas_cost_fill),
-        "elec_cost_fill": str(elec_cost_fill),
-        "gas_cost_samples": [
-            {"dt": str(k), "v": v} for k, v in sorted(gas_cost_pts.items())[:3]
-        ],
-        "elec_cost_samples": [
-            {"dt": str(k), "v": v} for k, v in sorted(elec_cost_pts.items())[:3]
-        ],
     })
     if injected:
         _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
