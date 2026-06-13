@@ -114,6 +114,14 @@ class FuseEnergyAPI:
         try:
             async with self._session.post(url, headers=h, json=payload) as resp:
                 body = await resp.text()
+                if resp.status == 429:
+                    retry_after = resp.headers.get("Retry-After", "")
+                    wait = int(retry_after) if retry_after.isdigit() else 60
+                    _LOGGER.warning(
+                        "FuseEnergy: rate limited (429) on %s — Retry-After %ds",
+                        _safe_url(url), wait,
+                    )
+                    raise FuseError(f"Rate limited (429) — retry after {wait}s")
                 if resp.status >= 400:
                     _log_failure(operation, url, status=resp.status, body=body)
                     if resp.status == 401:
@@ -139,6 +147,14 @@ class FuseEnergyAPI:
                     if await self._refresh():
                         return await self._get(url, operation=operation, _retried=True)
                     raise FuseAuthError("Token refresh failed — re-authentication required")
+                if resp.status == 429:
+                    retry_after = resp.headers.get("Retry-After", "")
+                    wait = int(retry_after) if retry_after.isdigit() else 60
+                    _LOGGER.warning(
+                        "FuseEnergy: rate limited (429) on %s — Retry-After %ds",
+                        _safe_url(url), wait,
+                    )
+                    raise FuseError(f"Rate limited (429) — retry after {wait}s")
                 if resp.status >= 400:
                     _log_failure(operation, url, status=resp.status, body=body)
                     if resp.status == 401:

@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from time import monotonic
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -16,6 +17,12 @@ from .statistics import async_inject_gas_yesterday, async_inject_today
 
 _LOGGER = logging.getLogger(__name__)
 _SCAN_INTERVAL = timedelta(hours=1)
+
+# TTLs for data that rarely changes — avoids hammering the API every poll.
+# Consumption chart (both monthly and today's hourly) is always fetched fresh.
+_PREMISES_TTL = 12 * 3600   # premises / supply list — 12 h
+_BALANCE_TTL  =  6 * 3600   # account balance — 6 h
+_TARIFF_TTL   = 24 * 3600   # tariff rates / standing charges — 24 h
 
 # Regex to extract numeric value from Fuse's formatted strings like "£0.2082"
 _PRICE_RE = re.compile(r"£?([\d.]+)")
@@ -146,13 +153,29 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
         super().__init__(hass, _LOGGER, name=DOMAIN, update_interval=_SCAN_INTERVAL)
         self.api = api
         self._premises_fid = premises_fid
+        # {cache_key: (monotonic_ts, data)} — avoids redundant API calls for slow-changing data
+        self._slow_cache: dict = {}
+
+    def _cache_get(self, key: str, ttl: float) -> object:
+        """Return cached value if still within TTL, else None."""
+        entry = self._slow_cache.get(key)
+        if entry is None:
+            return None
+        ts, data = entry
+        return data if (monotonic() - ts) < ttl else None
+
+    def _cache_set(self, key: str, data: object) -> None:
+        self._slow_cache[key] = (monotonic(), data)
 
     async def _async_update_data(self) -> FuseEnergyData:
         result = FuseEnergyData()
 
-        # --- Premises + supplies ---
+        # --- Premises + supplies (cached — rarely changes) ---
         try:
-            raw_premises = await self.api.get_premises()
+            raw_premises = self._cache_get("premises", _PREMISES_TTL)
+            if raw_premises is None:
+                raw_premises = await self.api.get_premises()
+                self._cache_set("premises", raw_premises)
         except FuseAuthError as err:
             # ConfigEntryAuthFailed tells HA to show re-auth notification in the UI
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -237,9 +260,12 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
             except Exception:  # pylint: disable=broad-except
                 pass  # Never crash the coordinator for statistics injection
 
-        # --- Balance ---
+        # --- Balance (cached — changes only when payments land) ---
         try:
-            bal = await self.api.get_balance()
+            bal = self._cache_get("balance", _BALANCE_TTL)
+            if bal is None:
+                bal = await self.api.get_balance()
+                self._cache_set("balance", bal)
             result.balance = _safe_float(bal.get("amount"))
             result.balance_currency = bal.get("currency", "GBP")
         except FuseError:
@@ -278,6 +304,14 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
         """Fetch contract tariff title, unit_rate, and standing_charge for a supply."""
         if not sd.supply.supply_fid or not premises_fid:
             return
+
+        # Tariff rates change at most quarterly — cache for 24 h.
+        cache_key = f"tariff:{sd.supply.supply_fid}"
+        cached = self._cache_get(cache_key, _TARIFF_TTL)
+        if cached is not None:
+            sd.tariff_title, sd.unit_rate, sd.standing_charge = cached
+            return
+
         try:
             resp = await self.api.get_current_contracts(premises_fid, sd.supply.supply_fid)
             by_fid = resp.get("supply_fid_to_contracts") or {}
@@ -288,6 +322,7 @@ class FuseEnergyCoordinator(DataUpdateCoordinator[FuseEnergyData]):
             tariff_id = tariff.get("tariff_id")
             if tariff_id:
                 await self._fetch_tariff_details(sd, tariff_id)
+            self._cache_set(cache_key, (sd.tariff_title, sd.unit_rate, sd.standing_charge))
         except FuseError:
             _LOGGER.debug("FuseEnergy: contracts fetch skipped for %s", sd.supply.supply_fid)
 
