@@ -13,9 +13,10 @@ CONF_AUTH_FLOW_TOKEN = "auth_flow_token"
 
 API_BASE_URL = "https://api.fuseenergy.com"
 
-# Proven from BuildConfig.java: VERSION_NAME=2.0.65, VERSION_CODE=542
-_APP_VERSION = "2.0.65"
-_APP_BUILD = "542"
+# 2.0.65 (build 542) was disabled by Fuse on 2026-06-13 (HTTP 426).
+# Current Play Store version is 2.0.73; build code estimated from linear increment.
+_APP_VERSION = "2.0.73"
+_APP_BUILD = "550"
 USER_AGENT = f"Mobile/Android/{_APP_VERSION}/{_APP_BUILD}"
 
 # supply_type values confirmed from live API response
