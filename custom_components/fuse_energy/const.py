@@ -13,11 +13,10 @@ CONF_AUTH_FLOW_TOKEN = "auth_flow_token"
 
 API_BASE_URL = "https://api.fuseenergy.com"
 
-# 2.0.65 (build 542) was disabled by Fuse on 2026-06-13 (HTTP 426).
-# Current Play Store version is 2.0.73; build code estimated from linear increment.
-_APP_VERSION = "2.0.73"
-_APP_BUILD = "550"
-USER_AGENT = f"Mobile/Android/{_APP_VERSION}/{_APP_BUILD}"
+# Generic UA — the underlying HTTP client library used by Android apps.
+# Avoids app-version blocking (Fuse has disabled specific Mobile/Android/X.Y.Z strings
+# via HTTP 426). okhttp has no app version to block and is accepted by the API.
+USER_AGENT = "okhttp/4.12.0"
 
 # supply_type values confirmed from live API response
 # (NOT "ELECTRICITY_IMPORT" — real value is "ELEC_IMPORT")
