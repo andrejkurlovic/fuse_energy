@@ -11,6 +11,12 @@ Statistic IDs injected:
   fuse_energy:gas_import_cost         — daily gas cost (GBP, has_sum)
 """
 from __future__ import annotations
+from homeassistant.components.recorder.statistics import (
+    async_add_external_statistics,
+    get_last_statistics,
+    statistics_during_period,
+)
+from homeassistant.components.recorder import get_instance as _get_recorder
 
 import asyncio
 import logging
@@ -52,21 +58,13 @@ except (ImportError, AttributeError):
     _MEAN_TYPE_NONE = None  # type: ignore[assignment]
     _USE_MEAN_TYPE = False
 
-from homeassistant.components.recorder import get_instance as _get_recorder
-from homeassistant.components.recorder.statistics import (
-    async_add_external_statistics,
-    get_last_statistics,
-    statistics_during_period,
-)
-
 
 def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
     name = _STAT_NAMES[statistic_id]
-    # unit_class: "energy" for kWh. "monetary" is unsupported before HA 2026.11
-    # so only pass unit_class for energy units; omit it for GBP.
-    kwargs: dict = {}
-    if unit == "kWh":
-        kwargs["unit_class"] = "energy"
+    # unit_class must always be specified (required from HA 2026.11)
+    # Simple fix for GBP as apparently HA doesn't have a unit_class for currency yet
+    # Pass none to avoid breakage and depreation warnings
+    kwargs: dict = {"unit_class": "energy" if unit == "kWh" else None}
     if _USE_MEAN_TYPE:
         return StatisticMetaData(
             source=DOMAIN,
@@ -193,8 +191,8 @@ async def async_inject_gas_yesterday(
         return
 
     # Per-series fill windows (None means nothing to do for that series)
-    gas_kwh_fill   = (gas_kwh_last   + timedelta(days=1)) if gas_kwh_last  < yesterday else None
-    gas_cost_fill  = (gas_cost_last  + timedelta(days=1)) if gas_cost_last  is not None and gas_cost_last  < yesterday else None
+    gas_kwh_fill = (gas_kwh_last + timedelta(days=1)) if gas_kwh_last < yesterday else None
+    gas_cost_fill = (gas_cost_last + timedelta(days=1)) if gas_cost_last is not None and gas_cost_last < yesterday else None
     elec_cost_fill = (elec_cost_last + timedelta(days=1)) if elec_cost_last is not None and elec_cost_last < yesterday else None
 
     if gas_kwh_fill is None and gas_cost_fill is None and elec_cost_fill is None:
@@ -247,7 +245,7 @@ async def async_inject_gas_yesterday(
                     start_dt = _bar_start(idx)
                     if start_dt is None:
                         continue
-                    kwh  = _safe_float(bar.get("kWh"))
+                    kwh = _safe_float(bar.get("kWh"))
                     cost = _safe_float((bar.get("money") or {}).get("amount"))
 
                     if is_gas:
