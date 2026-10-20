@@ -42,6 +42,15 @@ _STAT_NAMES: dict[str, str] = {
     STAT_GAS_COST: "Fuse Energy Gas Cost",
 }
 
+# How far back to re-check already-written days for a settled value.  Fuse
+# publishes provisional "FORECAST" bars first and revises them later, so a value
+# written early can be wrong and never gets corrected by the fill-window logic
+# (which only ever appends).  One week covers the observed settlement lag: gas
+# already runs a day behind, and days written three days ago are still unsettled.
+_REVISION_LOOKBACK_DAYS = 7
+# Absolute difference (kWh or GBP) below which a value is considered unchanged.
+_REVISION_TOLERANCE = 0.005
+
 # Try to import modern mean_type API (HA 2024.12+); fall back to has_mean for older HA
 try:
     from homeassistant.components.recorder.models import StatisticData, StatisticMetaData, StatisticMeanType
@@ -62,11 +71,12 @@ from homeassistant.components.recorder.statistics import (
 
 def _make_metadata(statistic_id: str, unit: str) -> StatisticMetaData:
     name = _STAT_NAMES[statistic_id]
-    # unit_class: "energy" for kWh. "monetary" is unsupported before HA 2026.11
-    # so only pass unit_class for energy units; omit it for GBP.
-    kwargs: dict = {}
-    if unit == "kWh":
-        kwargs["unit_class"] = "energy"
+    # HA 2026.11 makes unit_class mandatory: async_add_external_statistics reports
+    # usage when the key is missing (breaks_in_ha_version="2026.11"). Always supply
+    # it: "energy" for kWh, and None for GBP, which is the correct value for a
+    # monetary statistic — HA has no currency unit converter, and None means
+    # "no conversion applies" rather than "unknown".
+    kwargs: dict = {"unit_class": "energy" if unit == "kWh" else None}
     if _USE_MEAN_TYPE:
         return StatisticMetaData(
             source=DOMAIN,
@@ -120,6 +130,97 @@ def _safe_float(v: object) -> float | None:
         return None
 
 
+def _bar_is_settled(bar: dict) -> bool:
+    """True when Fuse has settled this bar, i.e. it is REALISED and not FORECAST."""
+    return str(bar.get("type") or "").upper() == "REALISED"
+
+
+def _day_start_utc(d: date) -> datetime:
+    """Local midnight on `d`, expressed in UTC (statistics rows are UTC-stamped)."""
+    return datetime(d.year, d.month, d.day, 0, 0, tzinfo=_TZ_LONDON).astimezone(_UTC)
+
+
+def _existing_daily_rows(
+    hass: HomeAssistant, stat_id: str, start_date: date, end_date: date
+) -> dict[date, tuple[float, float]]:
+    """Return {local_date: (state, sum)} for a daily statistic over a date window."""
+    rows = statistics_during_period(
+        hass,
+        _day_start_utc(start_date - timedelta(days=1)),
+        _day_start_utc(end_date + timedelta(days=2)),
+        {stat_id},
+        "day",
+        None,
+        {"state", "sum"},
+    )
+    out: dict[date, tuple[float, float]] = {}
+    for row in rows.get(stat_id) or []:
+        start = row.get("start")
+        start_ts = start.timestamp() if isinstance(start, datetime) else float(start)
+        local_date = datetime.fromtimestamp(start_ts, tz=_TZ_LONDON).date()
+        out[local_date] = (float(row.get("state") or 0.0), float(row.get("sum") or 0.0))
+    return out
+
+
+def _plan_revision(
+    hass: HomeAssistant,
+    stat_id: str,
+    settled: dict[date, float],
+    last_written: date,
+) -> tuple[list[StatisticData], list[str]] | None:
+    """Rebuild a daily series from the first settled change through the last written day.
+
+    A revised day cannot be rewritten on its own: every later row carries a
+    cumulative sum chained onto it.  So the whole tail is recomputed and handed to
+    async_add_external_statistics, which upserts each row by its start timestamp.
+
+    Returns (rows, change_descriptions) when something actually changed, else None.
+    """
+    if not settled:
+        return None
+
+    first = min(settled)
+    existing = _existing_daily_rows(hass, stat_id, first, last_written)
+    if not existing:
+        return None
+
+    prior = [(d, s) for d, (_, s) in existing.items() if d < first]
+    if not prior:
+        _LOGGER.warning(
+            "FuseEnergy revision %s: no stored sum before %s — skipping rewrite",
+            stat_id, first,
+        )
+        return None
+
+    _, cum = max(prior)
+    data: list[StatisticData] = []
+    changes: list[str] = []
+
+    day = first
+    while day <= last_written:
+        if day in settled:
+            value = settled[day]
+            stored = existing.get(day, (None, None))[0]
+            if stored is None or abs(value - stored) > _REVISION_TOLERANCE:
+                changes.append(
+                    f"{day}: {'missing' if stored is None else f'{stored:.3f}'}→{value:.3f}"
+                )
+        elif day in existing:
+            value = existing[day][0]
+        else:
+            day += timedelta(days=1)
+            continue
+        cum += value
+        data.append(
+            StatisticData(start=_day_start_utc(day), sum=round(cum, 6), state=round(value, 6))
+        )
+        day += timedelta(days=1)
+
+    if not data or not changes:
+        return None
+    return data, changes
+
+
 def _last_stat_date_and_sum(hass: HomeAssistant, stat_id: str) -> tuple[date | None, float]:
     """Return (last_date, cumulative_sum) for a statistic ID, or (None, 0) if empty."""
     rows = get_last_statistics(hass, 1, stat_id, True, {"sum", "start"})
@@ -156,7 +257,10 @@ async def async_inject_gas_yesterday(
     for the common case where only the current month is needed.  Previous months
     are still fetched via the API as needed.
 
-    Accepts any non-FORECAST bar type (recent data is PROVISIONAL until settled).
+    Gap fill accepts any bar type, because Fuse labels recently settled gas bars
+    as FORECAST (preliminary) and filtering on REALISED would drop valid recent
+    data.  Already-written days are then re-checked against settled bars, and a
+    day whose value has changed is rewritten along with every later row.
     Skips silently when no baseline exists (import_history not yet run).
     """
     if not premises_fid:
@@ -197,14 +301,16 @@ async def async_inject_gas_yesterday(
     gas_cost_fill  = (gas_cost_last  + timedelta(days=1)) if gas_cost_last  is not None and gas_cost_last  < yesterday else None
     elec_cost_fill = (elec_cost_last + timedelta(days=1)) if elec_cost_last is not None and elec_cost_last < yesterday else None
 
-    if gas_kwh_fill is None and gas_cost_fill is None and elec_cost_fill is None:
-        return  # All series current
+    # Days already written are re-checked for a settled value, because Fuse
+    # publishes provisional FORECAST bars first: a day written at 45 kWh can turn
+    # out to be 4 kWh once the meter read lands, and nothing else would correct it.
+    revision_start = max(SWITCH_IN_DATE, yesterday - timedelta(days=_REVISION_LOOKBACK_DAYS))
 
-    # Months needed across all active fill windows
+    # Months needed across all fill windows and the revision window
     fill_starts = [f for f in (gas_kwh_fill, gas_cost_fill, elec_cost_fill) if f is not None]
-    overall_start = min(fill_starts)
+    chart_start = min(fill_starts + [revision_start])
     months_needed: set[tuple[int, int]] = set()
-    d = overall_start
+    d = chart_start
     while d <= yesterday:
         months_needed.add((d.year, d.month))
         d += timedelta(days=1)
@@ -213,6 +319,13 @@ async def async_inject_gas_yesterday(
     gas_kwh_pts:  dict[datetime, float] = {}
     gas_cost_pts: dict[datetime, float] = {}
     elec_cost_pts: dict[datetime, float] = {}
+
+    # Settled (REALISED) daily values inside the revision window: date → value.
+    # These are allowed to overwrite days that were previously written on the
+    # strength of a provisional bar.
+    settled_gas_kwh:   dict[date, float] = {}
+    settled_gas_cost:  dict[date, float] = {}
+    settled_elec_cost: dict[date, float] = {}
 
     for year, month in sorted(months_needed):
         # Reuse the coordinator's pre-fetched chart for the current month to avoid
@@ -249,8 +362,14 @@ async def async_inject_gas_yesterday(
                         continue
                     kwh  = _safe_float(bar.get("kWh"))
                     cost = _safe_float((bar.get("money") or {}).get("amount"))
+                    settled = _bar_is_settled(bar) and bar_date >= revision_start
 
                     if is_gas:
+                        if settled:
+                            if kwh is not None and kwh > 0:
+                                settled_gas_kwh[bar_date] = kwh
+                            if cost is not None and cost >= 0:
+                                settled_gas_cost[bar_date] = cost
                         if gas_kwh_fill and bar_date >= gas_kwh_fill:
                             if kwh is not None and kwh > 0:
                                 gas_kwh_pts[start_dt] = kwh
@@ -258,6 +377,8 @@ async def async_inject_gas_yesterday(
                             if cost is not None and cost >= 0:
                                 gas_cost_pts[start_dt] = cost
                     elif is_elec:
+                        if settled and cost is not None and cost >= 0:
+                            settled_elec_cost[bar_date] = cost
                         if elec_cost_fill and bar_date >= elec_cost_fill:
                             if cost is not None and cost >= 0:
                                 elec_cost_pts[start_dt] = cost
@@ -285,6 +406,33 @@ async def async_inject_gas_yesterday(
 
     if injected:
         _LOGGER.info("FuseEnergy: daily backfill injected — %s", ", ".join(injected))
+
+    # ------------------------------------------------------------------
+    # Revision pass: days already written are re-checked against settled
+    # (REALISED) bars.  Everything from the first corrected day onwards is
+    # rewritten, because each row's cumulative sum is chained onto the previous
+    # one — rewriting a single day in place would leave every later sum wrong.
+    # ------------------------------------------------------------------
+    for stat_id, unit, settled_map, last_written in (
+        (STAT_GAS_KWH, "kWh", settled_gas_kwh, gas_kwh_last),
+        (STAT_GAS_COST, "GBP", settled_gas_cost, gas_cost_last),
+        (STAT_ELECTRICITY_COST, "GBP", settled_elec_cost, elec_cost_last),
+    ):
+        if last_written is None or not settled_map:
+            continue
+        plan = await recorder.async_add_executor_job(
+            _plan_revision, hass, stat_id, settled_map, last_written
+        )
+        if plan is None:
+            continue
+        rows, changes = plan
+        async_add_external_statistics(hass, _make_metadata(stat_id, unit), rows)
+        # WARNING, not INFO: this rewrites stored history, and integration INFO
+        # is not shown at HA's default log level, so a bad rewrite would be silent.
+        _LOGGER.warning(
+            "FuseEnergy: revised %s — %d row(s) rewritten; changed: %s",
+            stat_id, len(rows), "; ".join(changes),
+        )
 
 
 async def async_inject_today(
@@ -431,7 +579,9 @@ async def async_run_import(
       "daily"  — both=daily (monthly chart endpoint, ~9 API calls for full backfill)
 
     Returns a summary dict that is also written to the HA log.
-    Only REALISED bars (not FORECAST) are imported.
+    Electricity bars must be REALISED.  Gas bars of any type are imported (Fuse
+    labels recently settled gas as FORECAST), and are corrected later by the
+    revision pass in async_inject_gas_yesterday once the values settle.
     """
     if not premises_fid:
         _LOGGER.error("FuseEnergy import_history: premises_fid not set — integration not fully loaded")
