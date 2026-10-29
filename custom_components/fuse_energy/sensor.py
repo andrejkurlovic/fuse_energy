@@ -141,10 +141,12 @@ class FuseSupplySensor(CoordinatorEntity[FuseEnergyCoordinator], SensorEntity):
         coordinator: FuseEnergyCoordinator,
         description: FuseSupplySensorDescription,
         supply_data: FuseSupplyData,
+        account_device_id: str,
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._supply_fid = supply_data.supply.supply_fid
+        self._account_device_id = account_device_id
         self._attr_unique_id = f"{DOMAIN}_{self._supply_fid}_{description.key}"
 
     def _get_supply_data(self) -> FuseSupplyData | None:
@@ -167,7 +169,8 @@ class FuseSupplySensor(CoordinatorEntity[FuseEnergyCoordinator], SensorEntity):
             model=f"Smart {'Electricity' if is_elec else 'Gas'} Meter",
             serial_number=s.serial_number or None,
             hw_version=s.meter_type or None,
-            via_device=(DOMAIN, s.premises_fid),
+            # via_device (identifier tuple) is deprecated, removed in HA 2027.8.
+            via_device_id=self._account_device_id,
         )
 
     @property
@@ -250,11 +253,10 @@ async def async_setup_entry(
     coordinator: FuseEnergyCoordinator = hass.data[DOMAIN][entry.entry_id]
     d = coordinator.data
 
-    # Pre-register the account (premises) device so that meter devices' via_device
-    # reference resolves when async_add_entities processes them. Without this,
-    # HA logs a warning about a non-existing via_device at startup.
+    # Pre-register the account (premises) device. Its id is the meter devices'
+    # via_device_id, so it has to exist before async_add_entities processes them.
     dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
+    account_device = dev_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, d.premises_fid or "fuse_energy_account")},
         name=d.premises_name or "Fuse Energy",
@@ -268,7 +270,7 @@ async def async_setup_entry(
     # One set of supply sensors per meter
     for sd in d.supplies:
         for desc in _SUPPLY_SENSORS:
-            entities.append(FuseSupplySensor(coordinator, desc, sd))
+            entities.append(FuseSupplySensor(coordinator, desc, sd, account_device.id))
 
     # Account-level sensors
     for desc in _ACCOUNT_SENSORS:
